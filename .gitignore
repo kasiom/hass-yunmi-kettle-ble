@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Secrets — never commit
+.env
+
+# Personal capture / debug data (your real BLE traffic, Android bugreports)
+btsnoop_hci.log*
+bugreport*.zip
+*.zip
+*.log
+/debug/
+
+# Older decode scripts that still embed session keys (superseded by decode2.py)
+decrypt_all.py
+decrypt_props.py
+
+# Vendored reference clones of other projects (credited in README instead)
+_ref_miauth/
+_ref_mikettlepro/

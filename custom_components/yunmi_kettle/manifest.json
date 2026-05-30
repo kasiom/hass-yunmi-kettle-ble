@@ -1,0 +1,18 @@
+{
+  "domain": "yunmi_kettle",
+  "name": "Yunmi Kettle (Mi Smart Kettle Pro, BLE)",
+  "bluetooth": [
+    {
+      "connectable": true,
+      "service_uuid": "0000fe95-0000-1000-8000-00805f9b34fb"
+    }
+  ],
+  "codeowners": ["@opravdin"],
+  "config_flow": true,
+  "dependencies": ["bluetooth_adapters"],
+  "documentation": "https://github.com/opravdin/hass-yunmi-kettle-ble",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "requirements": ["bleak-retry-connector>=3.5.0"],
+  "version": "0.2.0"
+}

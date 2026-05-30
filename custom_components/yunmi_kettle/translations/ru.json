@@ -1,0 +1,65 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Yunmi Kettle (Mi Smart Kettle Pro)",
+        "description": "Подключение по Bluetooth (в т.ч. через ESPHome-проксю). MAC и токен достаются Xiaomi cloud token extractor.",
+        "data": {
+          "mac": "MAC-адрес",
+          "token": "BLE-токен (24 hex-символа)",
+          "name": "Название",
+          "target_temp": "Температура подогрева по умолчанию (°C)",
+          "poll_interval": "Интервал опроса (сек)"
+        }
+      }
+    },
+    "error": {
+      "invalid_mac": "MAC в формате AA:BB:CC:DD:EE:FF.",
+      "invalid_token": "Токен — 24 шестнадцатеричных символа.",
+      "cannot_connect": "Не удалось подключиться к чайнику. Проверьте, что он включён, в зоне действия Bluetooth-адаптера/прокси и его Bluetooth не занят телефоном.",
+      "invalid_auth": "Логин не прошёл — токен не подходит к этому чайнику."
+    },
+    "abort": {
+      "already_configured": "Этот чайник уже добавлен.",
+      "not_supported": "Это Bluetooth-устройство не Mi Smart Kettle Pro (yunmi.kettle.v14)."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Настройки чайника",
+        "data": {
+          "poll_interval": "Интервал опроса (сек)",
+          "target_temp": "Температура подогрева по умолчанию (°C)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "current_temp": { "name": "Температура воды" },
+      "keepwarm_target": { "name": "Целевая температура подогрева" },
+      "status": {
+        "name": "Статус",
+        "state": {
+          "standby": "Ожидание",
+          "heating": "Нагрев",
+          "boil_keepwarm": "Кипячение / подогрев",
+          "heat_to_set": "Нагрев до уставки",
+          "cooling": "Остывание",
+          "abnormal": "Ошибка"
+        }
+      }
+    },
+    "number": {
+      "profile_temp": { "name": "Профиль {profile}: температура" },
+      "profile_duration": { "name": "Профиль {profile}: время подогрева" }
+    },
+    "select": {
+      "active_profile": { "name": "Активный профиль" }
+    },
+    "switch": {
+      "keepwarm": { "name": "Подогрев после кипячения" }
+    }
+  }
+}
