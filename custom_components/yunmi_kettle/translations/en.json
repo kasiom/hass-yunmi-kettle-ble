@@ -8,14 +8,14 @@
           "mac": "MAC address",
           "token": "BLE token (24 hex chars)",
           "name": "Name",
-          "target_temp": "Default keep-warm temperature (°C)",
-          "poll_interval": "Poll interval (seconds)"
+          "poll_interval": "Push watchdog interval (seconds)"
         }
       }
     },
     "error": {
       "invalid_mac": "MAC must look like AA:BB:CC:DD:EE:FF.",
       "invalid_token": "Token must be 24 hexadecimal characters.",
+      "miot_token_not_supported": "This looks like a 32-character MiIO token. This kettle needs its 24-character BLE beaconkey instead.",
       "cannot_connect": "Couldn't reach the kettle. Check it's powered, in range of a Bluetooth adapter/proxy, and that its Bluetooth isn't held by the phone.",
       "invalid_auth": "Login failed — the token is wrong for this kettle."
     },
@@ -29,8 +29,7 @@
       "init": {
         "title": "Yunmi Kettle settings",
         "data": {
-          "poll_interval": "Poll interval (seconds)",
-          "target_temp": "Default keep-warm temperature (°C)"
+          "poll_interval": "Push watchdog interval (seconds)"
         }
       }
     }
@@ -60,6 +59,11 @@
     },
     "switch": {
       "keepwarm": { "name": "Keep warm after boil" }
+    }
+  },
+  "exceptions": {
+    "communication_failed": {
+      "message": "Communication with the kettle failed: {details}"
     }
   }
 }

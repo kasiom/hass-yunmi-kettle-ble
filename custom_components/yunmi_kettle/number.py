@@ -1,26 +1,29 @@
 """Numbers: the active keep-warm temperature, plus each of the 5 profiles'
 keep-warm temperature and keep-warm duration."""
+
 from __future__ import annotations
 
-from homeassistant.components.number import NumberEntity, NumberMode
+from homeassistant.components.number import NumberDeviceClass, NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature, UnitOfTime
+from homeassistant.const import EntityCategory, UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     DOMAIN,
+    DURATION_UNIT_MIN,
     MAX_DURATION,
     MAX_TEMP,
     MIN_DURATION,
     MIN_TEMP,
     PROFILE_COUNT,
-    DURATION_UNIT_MIN,
 )
 from .entity import YunmiKettleEntity
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add: AddEntitiesCallback) -> None:
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, add: AddEntitiesCallback
+) -> None:
     coordinator = hass.data[DOMAIN][entry.entry_id]
     entities: list[NumberEntity] = []
     for n in range(1, PROFILE_COUNT + 1):
@@ -31,6 +34,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add: AddEnt
 
 class KettleProfileTemp(YunmiKettleEntity, NumberEntity):
     _attr_translation_key = "profile_temp"
+    _attr_device_class = NumberDeviceClass.TEMPERATURE
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_native_min_value = MIN_TEMP
     _attr_native_max_value = MAX_TEMP
@@ -53,6 +58,8 @@ class KettleProfileTemp(YunmiKettleEntity, NumberEntity):
 
 class KettleProfileDuration(YunmiKettleEntity, NumberEntity):
     _attr_translation_key = "profile_duration"
+    _attr_device_class = NumberDeviceClass.DURATION
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
     _attr_native_min_value = MIN_DURATION
     _attr_native_max_value = MAX_DURATION

@@ -1,4 +1,5 @@
 """Sensors: current water temperature and status."""
+
 from __future__ import annotations
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
@@ -11,7 +12,9 @@ from .const import DOMAIN, STATUS_NAMES
 from .entity import YunmiKettleEntity
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add: AddEntitiesCallback) -> None:
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, add: AddEntitiesCallback
+) -> None:
     coordinator = hass.data[DOMAIN][entry.entry_id]
     add([KettleTemp(coordinator), KettleStatus(coordinator), KettleKeepwarmTarget(coordinator)])
 

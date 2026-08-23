@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.py[cod]
+work-venv/
 
 # Secrets — never commit
 .env

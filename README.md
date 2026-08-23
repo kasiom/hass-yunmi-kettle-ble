@@ -15,6 +15,25 @@ v14 does not have — it speaks MIoT-spec over the `0xFE95` service instead.
 > it is **not** an official or hardened component. Expect rough edges; read the code
 > before trusting it. PRs welcome.
 
+## What changed in 0.3
+
+Version 0.3 is maintained as an offline-aware fork while the changes are offered
+upstream. It keeps the existing `yunmi_kettle` domain, device identifier and entity
+unique IDs, so upgrading does not require recreating dashboards, history or automations.
+
+- A kettle disconnected from mains power is treated as normally offline. The config
+  entry still loads, entities become unavailable, and the next BLE advertisement after
+  power returns triggers reconnection.
+- BLE property notifications update Home Assistant immediately. The polling option is
+  now a watchdog interval (300 seconds by default), not the primary update mechanism.
+- All GATT commands are serialized. A changed number, select or switch is accepted only
+  after the kettle echoes the requested value; otherwise Home Assistant reports the
+  command as failed.
+- Profile controls are configuration entities with temperature/duration device classes.
+  Redacted diagnostics and Czech translations are included.
+- The unused legacy `target_temp` option is removed automatically during config-entry
+  migration. The actual active target remains the read-only keep-warm target sensor.
+
 ---
 
 ## ⚠️ The one hard limitation — read this first
@@ -63,7 +82,7 @@ The **status** sensor (siid 2 / piid 1) decodes these device states:
 | 4 | cooling |
 | 5 | error / abnormal |
 
-UI is localised in **English** and **Russian**.
+UI is localised in **Czech**, **English** and **Russian**.
 
 ---
 
@@ -78,11 +97,37 @@ UI is localised in **English** and **Russian**.
    the extractor (do this yourself — never paste your Xiaomi password anywhere else), find
    the kettle, and copy its **MAC** (`AA:BB:CC:DD:EE:FF`) and its **token / beaconkey**
    (24 hex characters). The kettle must already be bound to your Mi Home account once.
-3. **Copy the component.** Put `custom_components/yunmi_kettle/` into your HA
-   `config/custom_components/` and restart Home Assistant.
+3. **Install the component.** Home Assistant 2025.3 or newer is required. Add this
+   repository as a custom **Integration** repository in HACS, install *Yunmi Kettle*,
+   and restart Home Assistant. A manual copy of `custom_components/yunmi_kettle/` into
+   `config/custom_components/` works as well.
 4. **Add the integration.** Settings → Devices & Services → **Add Integration** →
-   *"Yunmi Kettle"*. Enter the MAC, the token, a name, a default keep-warm temperature and
-   a poll interval.
+   *"Yunmi Kettle"*. Enter the MAC, the token, a name and the push-watchdog interval.
+   The kettle must be powered during this one-time login check.
+
+## Power switching and recovery
+
+It is safe for the integration if a smart plug cuts power to the kettle. While the
+kettle is off, its entities become unavailable. When power is restored, Home Assistant
+2026.5 and newer forgets the previous duplicate-advertisement cache and reconnects as
+soon as a connectable BLE advertisement is received. No reload or Home Assistant restart
+should be necessary.
+
+Do not hard-code a particular smart-plug entity into this integration. Keep plug control
+in a Home Assistant script or automation, wait for the kettle entities to become
+available, and then change a profile if needed. This keeps the component reusable for
+direct adapters, ESPHome proxies and any brand of smart plug.
+
+## Upgrading from 0.2
+
+Install 0.3 over the existing component and restart Home Assistant. The config entry is
+migrated in place. The same devices and entity IDs remain registered; the ten profile
+number entities merely move to the **Configuration** section of the device page. The
+default watchdog changes from 60 to 300 seconds only for new entries—an explicitly saved
+poll interval remains unchanged.
+
+If recovery does not occur after switching power back on, download diagnostics from
+Settings → Devices & Services → Yunmi Kettle. MAC address and token are redacted.
 
 ---
 

@@ -1,0 +1,69 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Yunmi Kettle (Mi Smart Kettle Pro)",
+        "description": "Připojení přes Bluetooth, včetně ESPHome proxy. MAC adresu a token získáte pomocí Xiaomi cloud token extractoru.",
+        "data": {
+          "mac": "MAC adresa",
+          "token": "BLE token (24 hexadecimálních znaků)",
+          "name": "Název",
+          "poll_interval": "Kontrolní interval push dat (sekundy)"
+        }
+      }
+    },
+    "error": {
+      "invalid_mac": "MAC adresa musí mít formát AA:BB:CC:DD:EE:FF.",
+      "invalid_token": "Token musí obsahovat 24 hexadecimálních znaků.",
+      "miot_token_not_supported": "Toto vypadá jako 32znakový MiIO token. Konvice místo něj potřebuje svůj 24znakový BLE beaconkey.",
+      "cannot_connect": "Ke konvici se nelze připojit. Zkontrolujte napájení, dosah Bluetooth adaptéru či proxy a zda Bluetooth nevyužívá telefon.",
+      "invalid_auth": "Přihlášení selhalo — token nepatří této konvici."
+    },
+    "abort": {
+      "already_configured": "Tato konvice je již nastavená.",
+      "not_supported": "Toto Bluetooth zařízení není Mi Smart Kettle Pro (yunmi.kettle.v14)."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Nastavení Yunmi Kettle",
+        "data": {
+          "poll_interval": "Kontrolní interval push dat (sekundy)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "current_temp": { "name": "Teplota vody" },
+      "keepwarm_target": { "name": "Cílová teplota pro udržování" },
+      "status": {
+        "name": "Stav",
+        "state": {
+          "standby": "Pohotovostní režim",
+          "heating": "Ohřev",
+          "boil_keepwarm": "Var / udržování teploty",
+          "heat_to_set": "Ohřev na cílovou teplotu",
+          "cooling": "Chladnutí",
+          "abnormal": "Chyba"
+        }
+      }
+    },
+    "number": {
+      "profile_temp": { "name": "Teplota profilu {profile}" },
+      "profile_duration": { "name": "Doba udržování teploty pro profil {profile}" }
+    },
+    "select": {
+      "active_profile": { "name": "Aktivní profil" }
+    },
+    "switch": {
+      "keepwarm": { "name": "Udržovat teplotu po varu" }
+    }
+  },
+  "exceptions": {
+    "communication_failed": {
+      "message": "Komunikace s konvicí selhala: {details}"
+    }
+  }
+}

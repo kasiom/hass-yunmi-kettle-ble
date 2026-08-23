@@ -1,4 +1,5 @@
 """Switch: keep-warm on/off (insulation switch)."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -12,7 +13,9 @@ from .const import DOMAIN
 from .entity import YunmiKettleEntity
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add: AddEntitiesCallback) -> None:
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, add: AddEntitiesCallback
+) -> None:
     add([KettleKeepWarm(hass.data[DOMAIN][entry.entry_id])])
 
 

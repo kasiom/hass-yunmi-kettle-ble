@@ -7,19 +7,20 @@ BleakClient obtained from bleak-retry-connector.
 
 See PROTOCOL.md for the full reverse-engineered spec.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import struct
 from collections import deque
+from collections.abc import Callable
 
+from bleak import BleakClient
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 from cryptography.hazmat.primitives.hmac import HMAC
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-
-from bleak import BleakClient
 
 from .const import (
     ACK_DATA,
@@ -27,7 +28,6 @@ from .const import (
     CMD_LOGIN,
     HDR_SEND_INFO,
     HDR_SEND_KEY,
-    PROP_CURRENT_TEMP,
     RCV_OK,
     RCV_RDY,
     RESP_INFO,
@@ -49,7 +49,12 @@ class KettleError(Exception):
     """Protocol error."""
 
 
+class KettleAuthError(KettleError):
+    """The configured BLE token did not authenticate the kettle."""
+
+
 # --- crypto helpers -------------------------------------------------------
+
 
 def _hkdf(ikm: bytes, salt: bytes, info: bytes, length: int = 64) -> bytes:
     return HKDF(algorithm=hashes.SHA256(), length=length, salt=salt, info=info).derive(ikm)
@@ -67,30 +72,92 @@ def _ccm_nonce(iv: bytes, counter: int) -> bytes:
 
 # --- protocol -------------------------------------------------------------
 
+
 class YunmiKettle:
     """A connected, authenticated session to the kettle."""
 
-    def __init__(self, client: BleakClient, token: bytes) -> None:
+    def __init__(
+        self,
+        client: BleakClient,
+        token: bytes,
+        on_properties: Callable[[dict[tuple[int, int], int]], None] | None = None,
+    ) -> None:
         self._c = client
         self._token = token
+        self._on_properties = on_properties
         # buffer of received notifications; _await scans it WITHOUT discarding
         # non-matching frames, so an interleaved device push isn't lost while we
         # wait for an ack on another characteristic.
         self._inbox: deque[tuple[str, bytes]] = deque(maxlen=256)
         self._evt = asyncio.Event()
         self._keys: dict[str, bytes] = {}
-        self._tx_ctr = -1         # app->device AES counter; first command uses 0
-        self._tid = 0xb0          # plaintext transaction id
+        self._tx_ctr = -1  # app->device AES counter; first command uses 0
+        self._tid = 0xB0  # plaintext transaction id
         self._notify_uuid = UUID_MISERVICE_NOTIFY
         self._write_uuid = UUID_MISERVICE_WRITE
+        self._live_updates = False
+        self._property_values: dict[tuple[int, int], int] = {}
+        self._property_versions: dict[tuple[int, int], int] = {}
+        self._property_event = asyncio.Event()
+        self._notify_lock = asyncio.Lock()
+        self._notify_tasks: set[asyncio.Task[None]] = set()
 
     # ---- notification plumbing ----
 
     def _on_notify(self, sender, data: bytearray) -> None:
         uuid = getattr(sender, "uuid", str(sender)).lower()
-        _LOGGER.debug("notify %s <- %s", uuid, bytes(data).hex())
-        self._inbox.append((uuid, bytes(data)))
+        payload = bytes(data)
+        _LOGGER.debug("notify %s <- %s", uuid, payload.hex())
+        if (
+            self._live_updates
+            and uuid == self._notify_uuid
+            and len(payload) >= 6
+            and payload[0:3] == b"\x00\x00\x02"
+        ):
+            task = asyncio.create_task(self._async_handle_direct_update(payload))
+            self._notify_tasks.add(task)
+            task.add_done_callback(self._notify_task_done)
+            return
+        self._inbox.append((uuid, payload))
         self._evt.set()
+
+    def _notify_task_done(self, task: asyncio.Task[None]) -> None:
+        self._notify_tasks.discard(task)
+        if task.cancelled():
+            return
+        if error := task.exception():
+            _LOGGER.debug("property notification processing failed: %s", error)
+
+    async def _async_handle_direct_update(self, data: bytes) -> None:
+        """Acknowledge, decrypt and publish one direct property notification."""
+        async with self._notify_lock:
+            counter = struct.unpack("<H", data[4:6])[0]
+            try:
+                plaintext = self._decrypt(counter, data[6:])
+            except Exception:  # noqa: BLE001
+                plaintext = self._decrypt_auto(data[6:])
+            await self._write(self._notify_uuid, ACK_DATA)
+            if plaintext is None:
+                raise KettleError("could not decrypt property notification")
+            properties = {(siid, piid): value for siid, piid, value in self._parse_all(plaintext)}
+            if not properties:
+                return
+            for pair, value in properties.items():
+                self._property_values[pair] = value
+                self._property_versions[pair] = self._property_versions.get(pair, 0) + 1
+            self._property_event.set()
+            if self._on_properties is not None:
+                self._on_properties(properties)
+
+    async def async_stop(self) -> None:
+        """Stop dispatching notifications before the BLE client disconnects."""
+        self._live_updates = False
+        tasks = tuple(self._notify_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._notify_tasks.clear()
 
     def _scan(self, predicate) -> tuple[str, bytes] | None:
         for i, (u, d) in enumerate(self._inbox):
@@ -118,7 +185,7 @@ class YunmiKettle:
             self._evt.clear()
             try:
                 await asyncio.wait_for(self._evt.wait(), timeout=remaining)
-            except (asyncio.TimeoutError, TimeoutError):
+            except TimeoutError:
                 hit = self._scan(predicate)
                 if hit is not None:
                     return hit
@@ -132,7 +199,9 @@ class YunmiKettle:
             _LOGGER.debug("mtu_size unavailable: %s", err)
         for s in self._c.services:
             for ch in s.characteristics:
-                _LOGGER.debug("GATT char %s handle=0x%04x props=%s", ch.uuid, ch.handle, ch.properties)
+                _LOGGER.debug(
+                    "GATT char %s handle=0x%04x props=%s", ch.uuid, ch.handle, ch.properties
+                )
         for uuid in (UUID_UPNP, UUID_AUTH, UUID_MISERVICE_NOTIFY, UUID_MISERVICE_WRITE):
             try:
                 await self._c.start_notify(uuid, self._on_notify)
@@ -145,7 +214,7 @@ class YunmiKettle:
 
     async def _write_parcel(self, uuid: str, payload: bytes) -> None:
         for i in range(0, len(payload), 18):
-            chunk = bytes([i // 18 + 1, 0]) + payload[i:i + 18]
+            chunk = bytes([i // 18 + 1, 0]) + payload[i : i + 18]
             await self._write(uuid, chunk)
 
     # ---- login ----
@@ -190,14 +259,18 @@ class YunmiKettle:
         # 3) device sends remote_key (00 00 02 0d) then remote_info (00 00 02 0c)
         #    as direct frames (post auth-init mode); ack each with 00 00 03 00.
         _, rk = await self._await(
-            lambda u, d: len(d) >= 4 and d[0] == 0 and d[1] == 0 and d[2] == 0x02 and d[3] == RESP_KEY
+            lambda u, d: (
+                len(d) >= 4 and d[0] == 0 and d[1] == 0 and d[2] == 0x02 and d[3] == RESP_KEY
+            )
         )
-        remote_key = rk[4:4 + 16]
+        remote_key = rk[4 : 4 + 16]
         await self._write(UUID_AUTH, ACK_DATA)
         _, ri = await self._await(
-            lambda u, d: len(d) >= 4 and d[0] == 0 and d[1] == 0 and d[2] == 0x02 and d[3] == RESP_INFO
+            lambda u, d: (
+                len(d) >= 4 and d[0] == 0 and d[1] == 0 and d[2] == 0x02 and d[3] == RESP_INFO
+            )
         )
-        remote_info = ri[4:4 + 32]
+        remote_info = ri[4 : 4 + 32]
         await self._write(UUID_AUTH, ACK_DATA)
 
         # 4) derive + verify session keys
@@ -205,11 +278,13 @@ class YunmiKettle:
         salt_inv = remote_key + rand
         d = _hkdf(self._token, salt, b"mible-login-info", 64)
         self._keys = {
-            "dev_key": d[0:16], "app_key": d[16:32],
-            "dev_iv": d[32:36], "app_iv": d[36:40],
+            "dev_key": d[0:16],
+            "app_key": d[16:32],
+            "dev_iv": d[32:36],
+            "app_iv": d[36:40],
         }
         if _hmac(self._keys["dev_key"], salt_inv) != remote_info:
-            raise KettleError("remote_info mismatch - wrong token?")
+            raise KettleAuthError("remote_info mismatch - wrong token")
         login_info = _hmac(self._keys["app_key"], salt)
 
         # 5) send login_info as a single parcel (matches the app), wait OK + CFM_LOGIN_OK
@@ -231,9 +306,10 @@ class YunmiKettle:
                 timeout=4.0,
             )
             _LOGGER.debug("f0 echo (direct): %s", echo.hex())
-            await self._write(self._notify_uuid, ACK_DATA)   # 00 00 03 00
+            await self._write(self._notify_uuid, ACK_DATA)  # 00 00 03 00
         except KettleError:
             _LOGGER.debug("no f0 echo")
+        self._live_updates = True
 
     async def _receive(self, channel: str = UUID_AUTH) -> bytes:
         """Receive a framed transfer from the device on ``channel``.
@@ -242,9 +318,7 @@ class YunmiKettle:
         RCV_RDY; device sends <cnt> data frames (<frm_le16> <payload>); we ack
         with RCV_OK. Returns the reassembled payload (frame counters stripped).
         """
-        _, hdr = await self._await(
-            lambda u, d: len(d) == 6 and d[0] == 0 and d[1] == 0
-        )
+        _, hdr = await self._await(lambda u, d: len(d) == 6 and d[0] == 0 and d[1] == 0)
         expected = hdr[4] | (hdr[5] << 8)
         await self._write(channel, RCV_RDY)
         buf = b""
@@ -276,7 +350,9 @@ class YunmiKettle:
             _ccm_nonce(self._keys["dev_iv"], counter), ct, None
         )
 
-    def _build_tlv(self, op: int, siid: int, piid: int, value: bytes = b"", vtype: int = 0) -> bytes:
+    def _build_tlv(
+        self, op: int, siid: int, piid: int, value: bytes = b"", vtype: int = 0
+    ) -> bytes:
         body = bytes([op, 0x01, siid, piid, 0x00])
         if value:
             body += bytes([0x01, vtype]) + value
@@ -288,13 +364,14 @@ class YunmiKettle:
     async def set_property(
         self, siid: int, piid: int, value: int, vtype: int = VTYPE_U8
     ) -> dict[tuple[int, int], int]:
+        pair = (siid, piid)
+        baseline = {pair: self._property_versions.get(pair, 0)}
         vbytes = struct.pack("<B", value) if vtype == VTYPE_U8 else struct.pack("<H", value)
         tlv = self._build_tlv(0x00, siid, piid, vbytes, vtype)
         ctr, ct = self._encrypt(tlv)
         await self._send_request(struct.pack("<H", ctr) + ct)
         _LOGGER.info("set siid=%s piid=%s value=%s", siid, piid, value)
-        # the device echoes the changed property back; collect it (confirms write)
-        echo = await self._collect(3.0, stop_when={(siid, piid)})
+        echo = await self._wait_for_confirmed_value(pair, value, baseline[pair], timeout=3.0)
         _LOGGER.debug("set echo: %s", echo)
         return echo
 
@@ -321,12 +398,20 @@ class YunmiKettle:
 
     # the properties we actually surface (read one-at-a-time; see SUBSCRIBE_CHUNK)
     SUBSCRIBE_PAIRS = [
-        (2, 1),                                       # status
-        (3, 6),                                       # current temp
-        (3, 2),                                       # keep-warm switch
-        (3, 3),                                       # active profile
-        (5, 1), (5, 2), (5, 3), (5, 4), (5, 5),       # preset temps
-        (5, 6), (5, 7), (5, 8), (5, 9), (5, 10),      # preset keep-warm durations
+        (2, 1),  # status
+        (3, 6),  # current temp
+        (3, 2),  # keep-warm switch
+        (3, 3),  # active profile
+        (5, 1),
+        (5, 2),
+        (5, 3),
+        (5, 4),
+        (5, 5),  # preset temps
+        (5, 6),
+        (5, 7),
+        (5, 8),
+        (5, 9),
+        (5, 10),  # preset keep-warm durations
     ]
 
     @staticmethod
@@ -358,7 +443,7 @@ class YunmiKettle:
             pos = 6
             while pos + 7 <= len(pt):
                 siid, piid, vlen = pt[pos], pt[pos + 1], pt[pos + 5]
-                val = pt[pos + 7:pos + 7 + vlen]
+                val = pt[pos + 7 : pos + 7 + vlen]
                 v = cls._val(vlen, val)
                 if v is not None:
                     out.append((siid, piid, v))
@@ -381,9 +466,57 @@ class YunmiKettle:
         await self._send_request(struct.pack("<H", ctr) + ct)
 
     # ≤ this many (siid,piid) per subscribe so the op=0x03 response fits in ONE
-    # direct notify (MTU-3 ≈ 93 B; ~8 B/entry). The full 17-prop batch would need
+    # direct notify (MTU-3 ≈ 93 B; ~8 B/entry). The full 14-prop batch would need
     # a framed multi-parcel transfer the device does not deliver over the proxy.
     SUBSCRIBE_CHUNK = 1
+
+    async def _wait_for_properties(
+        self,
+        pairs: set[tuple[int, int]],
+        baseline: dict[tuple[int, int], int],
+        timeout: float,
+    ) -> dict[tuple[int, int], int]:
+        """Wait until every requested property has a newer notification."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            self._property_event.clear()
+            updated = {
+                pair: self._property_values[pair]
+                for pair in pairs
+                if self._property_versions.get(pair, 0) > baseline.get(pair, 0)
+            }
+            if pairs <= updated.keys():
+                return updated
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                missing = sorted(pairs - updated.keys())
+                raise KettleError(f"timeout waiting for properties: {missing}")
+            try:
+                await asyncio.wait_for(self._property_event.wait(), timeout=remaining)
+            except TimeoutError:
+                missing = sorted(pairs - updated.keys())
+                raise KettleError(f"timeout waiting for properties: {missing}") from None
+
+    async def _wait_for_confirmed_value(
+        self,
+        pair: tuple[int, int],
+        expected: int,
+        baseline: int,
+        timeout: float,
+    ) -> dict[tuple[int, int], int]:
+        """Ignore unrelated pushes until the device echoes the written value."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        version = baseline
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise KettleError(f"device did not confirm property {pair} value={expected}")
+            result = await self._wait_for_properties({pair}, {pair: version}, timeout=remaining)
+            if result[pair] == expected:
+                return result
+            version = self._property_versions.get(pair, version)
 
     async def subscribe_and_read(self, collect: float = 4.0) -> dict[tuple[int, int], int]:
         """Read current property values by subscribing in small chunks, so each
@@ -392,9 +525,11 @@ class YunmiKettle:
         result: dict[tuple[int, int], int] = {}
         pairs = self.SUBSCRIBE_PAIRS
         for i in range(0, len(pairs), self.SUBSCRIBE_CHUNK):
-            chunk = pairs[i:i + self.SUBSCRIBE_CHUNK]
+            chunk = pairs[i : i + self.SUBSCRIBE_CHUNK]
+            wanted = set(chunk)
+            baseline = {pair: self._property_versions.get(pair, 0) for pair in wanted}
             await self._send_subscribe(chunk)
-            got = await self._collect(collect, stop_when=set(chunk))
+            got = await self._wait_for_properties(wanted, baseline, timeout=collect)
             result.update(got)
         _LOGGER.debug("subscribe read %s props: %s", len(result), result)
         return result
@@ -430,7 +565,9 @@ class YunmiKettle:
                 got = 0
                 while got < expected:
                     try:
-                        _, frm = await self._await(lambda u, d: len(d) >= 3 and d[0] != 0, timeout=2.5)
+                        _, frm = await self._await(
+                            lambda u, d: len(d) >= 3 and d[0] != 0, timeout=2.5
+                        )
                     except KettleError:
                         break
                     buf += frm[2:]
@@ -470,10 +607,12 @@ class YunmiKettle:
         for siid, piid in pairs:
             if (siid, piid) in result:
                 continue
+            pair = (siid, piid)
+            baseline = {pair: self._property_versions.get(pair, 0)}
             tlv = self._build_tlv(0x01, siid, piid)
             ctr, ct = self._encrypt(tlv)
             await self._send_request(struct.pack("<H", ctr) + ct)
-            got = await self._collect(timeout, stop_when={(siid, piid)})
+            got = await self._wait_for_properties({pair}, baseline, timeout=timeout)
             result.update(got)
         return result
 

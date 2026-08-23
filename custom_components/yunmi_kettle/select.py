@@ -1,4 +1,5 @@
 """Select: which of the 5 keep-warm profiles is active."""
+
 from __future__ import annotations
 
 from homeassistant.components.select import SelectEntity
@@ -10,7 +11,9 @@ from .const import DOMAIN, PROFILE_COUNT
 from .entity import YunmiKettleEntity
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add: AddEntitiesCallback) -> None:
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, add: AddEntitiesCallback
+) -> None:
     add([KettleActiveProfile(hass.data[DOMAIN][entry.entry_id])])
 
 

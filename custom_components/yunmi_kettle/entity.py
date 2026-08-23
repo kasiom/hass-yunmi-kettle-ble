@@ -1,4 +1,5 @@
 """Base entity for Yunmi Kettle."""
+
 from __future__ import annotations
 
 from homeassistant.helpers.device_registry import DeviceInfo
