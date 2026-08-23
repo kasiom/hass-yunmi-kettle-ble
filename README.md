@@ -24,8 +24,9 @@ unique IDs, so upgrading does not require recreating dashboards, history or auto
 - A kettle disconnected from mains power is treated as normally offline. The config
   entry still loads, entities become unavailable, and the next BLE advertisement after
   power returns triggers reconnection.
-- BLE property notifications update Home Assistant immediately. The polling option is
-  now a watchdog interval (300 seconds by default), not the primary update mechanism.
+- BLE property notifications update Home Assistant immediately. After the initial complete
+  subscription snapshot, the polling option is only a watchdog that reads one status property
+  (300 seconds by default); it does not repeatedly resubscribe every property.
 - All GATT commands are serialized. A changed number, select or switch is accepted only
   after the kettle echoes the requested value; otherwise Home Assistant reports the
   command as failed.
