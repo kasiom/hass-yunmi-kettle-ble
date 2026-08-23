@@ -274,6 +274,62 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["profile_temp"], 90)
         self.assertEqual(data["profile_duration_5"], 720)
 
+    async def test_connected_watchdog_reads_only_status_after_initial_snapshot(self) -> None:
+        coordinator = self._coordinator()
+
+        class _Device:
+            full_reads = 0
+            watchdog_reads = 0
+
+            async def subscribe_and_read(self):
+                self.full_reads += 1
+                return {(2, 1): 0, (3, 6): 22}
+
+            async def read_many(self, pairs):
+                self.watchdog_reads += 1
+                self.last_pairs = pairs
+                return {(2, 1): 0}
+
+        device = _Device()
+        coordinator._client = types.SimpleNamespace(is_connected=True)
+        coordinator._dev = device
+
+        initial = await coordinator._async_update_data()
+        coordinator.data = initial
+        watchdog = await coordinator._async_update_data()
+
+        self.assertEqual(device.full_reads, 1)
+        self.assertEqual(device.watchdog_reads, 1)
+        self.assertEqual(device.last_pairs, [(2, 1)])
+        self.assertEqual(coordinator.full_snapshot_count, 1)
+        self.assertEqual(coordinator.watchdog_count, 1)
+        self.assertIsNotNone(coordinator.last_watchdog)
+        self.assertEqual(watchdog["current_temp"], 22)
+
+    async def test_advertisement_records_signal_without_reconnecting_live_session(self) -> None:
+        coordinator = self._coordinator()
+        coordinator._client = types.SimpleNamespace(is_connected=True)
+        coordinator._dev = object()
+
+        coordinator._async_bluetooth_callback(
+            types.SimpleNamespace(address=coordinator.address, rssi=-72),
+            None,
+        )
+
+        self.assertEqual(coordinator.last_rssi, -72)
+        self.assertIsNone(coordinator._reconnect_task)
+
+    async def test_push_records_separate_diagnostics(self) -> None:
+        coordinator = self._coordinator()
+
+        coordinator._async_handle_push({(3, 6): 23})
+
+        self.assertEqual(coordinator.push_count, 1)
+        self.assertIsNotNone(coordinator.last_push)
+        self.assertEqual(coordinator.data["current_temp"], 23)
+        self.assertIsNone(coordinator.last_watchdog)
+        self.assertEqual(coordinator.watchdog_count, 0)
+
     async def test_disconnect_marks_unavailable_and_waits_for_advertisement(self) -> None:
         coordinator = self._coordinator()
         client = types.SimpleNamespace(is_connected=False)
@@ -293,6 +349,8 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(device.stopped)
         self.assertIsNone(coordinator._client)
         self.assertIsNone(coordinator.update_interval)
+        self.assertEqual(coordinator.disconnect_count, 1)
+        self.assertIsNotNone(coordinator.last_disconnect)
         self.assertFalse(coordinator.last_update_success)
         self.assertIsInstance(coordinator.last_exception, protocol.KettleError)
         self.assertIn(
