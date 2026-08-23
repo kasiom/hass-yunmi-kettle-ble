@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import struct
 import unittest
 from pathlib import Path
 
@@ -22,7 +23,20 @@ class MetadataTests(unittest.TestCase):
         hacs = json.loads((ROOT / "hacs.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["version"], "0.3.0")
         self.assertEqual(manifest["iot_class"], "local_push")
+        self.assertEqual(
+            manifest["issue_tracker"],
+            "https://github.com/opravdin/hass-yunmi-kettle-ble/issues",
+        )
         self.assertEqual(hacs["homeassistant"], "2025.3.0")
+
+    def test_brand_icon_is_a_256_pixel_png(self) -> None:
+        icon = (COMPONENT / "brand" / "icon.png").read_bytes()
+        self.assertEqual(icon[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(struct.unpack(">II", icon[16:24]), (256, 256))
+
+        high_density_icon = (COMPONENT / "brand" / "icon@2x.png").read_bytes()
+        self.assertEqual(high_density_icon[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(struct.unpack(">II", high_density_icon[16:24]), (512, 512))
 
     def test_translation_structure_matches_english(self) -> None:
         translations = COMPONENT / "translations"
