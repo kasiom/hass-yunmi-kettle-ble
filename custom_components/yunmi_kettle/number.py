@@ -4,13 +4,12 @@ keep-warm temperature and keep-warm duration."""
 from __future__ import annotations
 
 from homeassistant.components.number import NumberDeviceClass, NumberEntity, NumberMode
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from . import YunmiKettleConfigEntry
 from .const import (
-    DOMAIN,
     DURATION_UNIT_MIN,
     MAX_DURATION,
     MAX_TEMP,
@@ -22,9 +21,9 @@ from .entity import YunmiKettleEntity
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, add: AddEntitiesCallback
+    hass: HomeAssistant, entry: YunmiKettleConfigEntry, add: AddEntitiesCallback
 ) -> None:
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
     entities: list[NumberEntity] = []
     for n in range(1, PROFILE_COUNT + 1):
         entities.append(KettleProfileTemp(coordinator, n))

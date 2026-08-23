@@ -33,6 +33,9 @@ unique IDs, so upgrading does not require recreating dashboards, history or auto
   Redacted diagnostics and Czech translations are included.
 - The unused legacy `target_temp` option is removed automatically during config-entry
   migration. The actual active target remains the read-only keep-warm target sensor.
+- Version 0.3.1 hardens backoff recovery, keeps entities unavailable until the first complete
+  snapshot, moves runtime state to `ConfigEntry.runtime_data`, and offers a beaconkey reauth
+  flow if the kettle rejects its saved key.
 
 ---
 

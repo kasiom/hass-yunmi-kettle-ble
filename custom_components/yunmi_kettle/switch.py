@@ -5,18 +5,17 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from . import YunmiKettleConfigEntry
 from .entity import YunmiKettleEntity
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, add: AddEntitiesCallback
+    hass: HomeAssistant, entry: YunmiKettleConfigEntry, add: AddEntitiesCallback
 ) -> None:
-    add([KettleKeepWarm(hass.data[DOMAIN][entry.entry_id])])
+    add([KettleKeepWarm(entry.runtime_data)])
 
 
 class KettleKeepWarm(YunmiKettleEntity, SwitchEntity):

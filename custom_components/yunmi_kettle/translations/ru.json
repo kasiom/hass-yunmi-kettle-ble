@@ -9,6 +9,22 @@
           "token": "BLE-токен (24 hex-символа)",
           "name": "Название",
           "poll_interval": "Интервал сторожевого опроса push-данных (сек)"
+        },
+        "data_description": {
+          "mac": "Bluetooth MAC-адрес чайника.",
+          "token": "24-символьный BLE beaconkey; 32-символьный токен MiIO не подходит.",
+          "name": "Название устройства в Home Assistant.",
+          "poll_interval": "Резервный интервал полного снимка. Push-обновления остаются мгновенными."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Обновить BLE-ключ чайника",
+        "description": "Чайник отклонил сохранённый BLE beaconkey. Введите текущий 24-значный beaconkey при включённом чайнике.",
+        "data": {
+          "token": "BLE-токен / beaconkey (24 шестнадцатеричных символа)"
+        },
+        "data_description": {
+          "token": "Новый 24-символьный BLE beaconkey скрывается при вводе."
         }
       }
     },
@@ -64,6 +80,9 @@
   "exceptions": {
     "communication_failed": {
       "message": "Ошибка связи с чайником: {details}"
+    },
+    "authentication_failed": {
+      "message": "Чайник отклонил BLE beaconkey. Запущена повторная аутентификация."
     }
   }
 }

@@ -9,6 +9,22 @@
           "token": "BLE token (24 hex chars)",
           "name": "Name",
           "poll_interval": "Push watchdog interval (seconds)"
+        },
+        "data_description": {
+          "mac": "The kettle's Bluetooth MAC address.",
+          "token": "The 24-character BLE beaconkey; a 32-character MiIO token will not work.",
+          "name": "The device name shown in Home Assistant.",
+          "poll_interval": "Fallback full snapshot interval. Push notifications remain immediate."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Update the kettle BLE key",
+        "description": "The kettle rejected its saved BLE beaconkey. Enter the current 24-character beaconkey while the kettle is powered on.",
+        "data": {
+          "token": "BLE token / beaconkey (24 hex chars)"
+        },
+        "data_description": {
+          "token": "The replacement 24-character BLE beaconkey is hidden while typing."
         }
       }
     },
@@ -64,6 +80,9 @@
   "exceptions": {
     "communication_failed": {
       "message": "Communication with the kettle failed: {details}"
+    },
+    "authentication_failed": {
+      "message": "The kettle rejected its BLE beaconkey. Reauthentication has been started."
     }
   }
 }

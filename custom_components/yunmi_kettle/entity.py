@@ -24,3 +24,8 @@ class YunmiKettleEntity(CoordinatorEntity[YunmiKettleCoordinator]):
             manufacturer="Xiaomi",
             model="Mi Smart Kettle Pro (yunmi.kettle.v14)",
         )
+
+    @property
+    def available(self) -> bool:
+        """Keep entities unavailable until the first complete BLE snapshot."""
+        return self.coordinator.data is not None and super().available

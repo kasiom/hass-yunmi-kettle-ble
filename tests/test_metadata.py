@@ -21,13 +21,19 @@ class MetadataTests(unittest.TestCase):
     def test_manifest_and_hacs_versions(self) -> None:
         manifest = json.loads((COMPONENT / "manifest.json").read_text(encoding="utf-8"))
         hacs = json.loads((ROOT / "hacs.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.3.0")
+        self.assertEqual(manifest["version"], "0.3.1")
         self.assertEqual(manifest["iot_class"], "local_push")
         self.assertEqual(
             manifest["issue_tracker"],
             "https://github.com/opravdin/hass-yunmi-kettle-ble/issues",
         )
         self.assertEqual(hacs["homeassistant"], "2025.3.0")
+
+        config_flow = (COMPONENT / "config_flow.py").read_text(encoding="utf-8")
+        self.assertNotIn("OptionsFlowWithReload", config_flow)
+        integration = (COMPONENT / "__init__.py").read_text(encoding="utf-8")
+        self.assertIn("entry.runtime_data = coordinator", integration)
+        self.assertNotIn("await coordinator.async_refresh()", integration)
 
     def test_brand_icon_is_a_256_pixel_png(self) -> None:
         icon = (COMPONENT / "brand" / "icon.png").read_bytes()

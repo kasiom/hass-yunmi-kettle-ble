@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1
+
+- Keep a reconnect scheduled when an advertisement arrives during exponential backoff,
+  preventing Home Assistant's duplicate-advertisement cache from stranding an online kettle.
+- Load entities unavailable until the first complete BLE snapshot instead of forcing a setup
+  connection when a mains-switched kettle is offline.
+- Store the coordinator in typed `ConfigEntry.runtime_data` and add a BLE beaconkey reauth flow.
+- Restore the declared Home Assistant 2025.3 compatibility by using the compatible options-flow
+  reload pattern instead of the newer `OptionsFlowWithReload` helper.
+
 ## 0.3.0
 
 - Treat a powered-off kettle as a normal offline state: entities load as unavailable and
