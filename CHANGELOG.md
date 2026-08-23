@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.2
+
+- Replace the repeated fourteen-property watchdog snapshot with one lightweight status read;
+  initial subscriptions still provide immediate push updates.
+- Add redacted connection diagnostics for the last advertisement RSSI, session uptime,
+  successful connections, disconnects, unsolicited pushes, full snapshots, and watchdog reads.
+- Keep the recommended watchdog interval at 300 seconds to reduce BLE traffic while retaining
+  automatic liveness checks.
+
 ## 0.3.1
 
 - Keep a reconnect scheduled when an advertisement arrives during exponential backoff,

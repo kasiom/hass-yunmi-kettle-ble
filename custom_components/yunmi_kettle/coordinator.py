@@ -76,6 +76,16 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         self._last_advertisement: datetime | None = None
         self._last_success: datetime | None = None
         self._last_error: Exception | None = None
+        self._last_rssi: int | None = None
+        self._connection_started_at: datetime | None = None
+        self._last_disconnect: datetime | None = None
+        self._last_push: datetime | None = None
+        self._last_watchdog: datetime | None = None
+        self._connection_count = 0
+        self._disconnect_count = 0
+        self._full_snapshot_count = 0
+        self._push_count = 0
+        self._watchdog_count = 0
 
     @property
     def connected(self) -> bool:
@@ -96,6 +106,56 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
     def last_error(self) -> Exception | None:
         """Return the most recent communication error."""
         return self._last_error
+
+    @property
+    def last_rssi(self) -> int | None:
+        """Return RSSI from the advertisement that most recently woke the entry."""
+        return self._last_rssi
+
+    @property
+    def connection_started_at(self) -> datetime | None:
+        """Return when the current authenticated session started."""
+        return self._connection_started_at
+
+    @property
+    def last_disconnect(self) -> datetime | None:
+        """Return when the most recent session ended unexpectedly."""
+        return self._last_disconnect
+
+    @property
+    def last_push(self) -> datetime | None:
+        """Return when the most recent unsolicited property push arrived."""
+        return self._last_push
+
+    @property
+    def last_watchdog(self) -> datetime | None:
+        """Return when the most recent lightweight watchdog read succeeded."""
+        return self._last_watchdog
+
+    @property
+    def connection_count(self) -> int:
+        """Return successful authenticated sessions since entry setup."""
+        return self._connection_count
+
+    @property
+    def disconnect_count(self) -> int:
+        """Return unexpected or error-driven disconnects since entry setup."""
+        return self._disconnect_count
+
+    @property
+    def full_snapshot_count(self) -> int:
+        """Return complete subscription snapshots since entry setup."""
+        return self._full_snapshot_count
+
+    @property
+    def push_count(self) -> int:
+        """Return unsolicited property pushes since entry setup."""
+        return self._push_count
+
+    @property
+    def watchdog_count(self) -> int:
+        """Return lightweight status reads since entry setup."""
+        return self._watchdog_count
 
     @property
     def consecutive_failures(self) -> int:
@@ -123,6 +183,7 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         self, service_info: BluetoothServiceInfoBleak, _change: BluetoothChange
     ) -> None:
         self._last_advertisement = datetime.now(UTC)
+        self._last_rssi = getattr(service_info, "rssi", None)
         if self.connected:
             return
         if self._reconnect_task is not None and not self._reconnect_task.done():
@@ -160,6 +221,7 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         dev = self._dev
         self._client = None
         self._dev = None
+        self._record_disconnect()
         if dev is not None:
             await dev.async_stop()
         error = KettleError("BLE connection closed")
@@ -200,7 +262,15 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
             raise
         self._client = client
         self._dev = dev
+        self._connection_started_at = datetime.now(UTC)
+        self._connection_count += 1
         return dev
+
+    def _record_disconnect(self) -> None:
+        """Record the end of a session without exposing adapter identifiers."""
+        self._connection_started_at = None
+        self._last_disconnect = datetime.now(UTC)
+        self._disconnect_count += 1
 
     def _merge_properties(
         self,
@@ -229,6 +299,8 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
     @callback
     def _async_handle_push(self, properties: dict[tuple[int, int], int]) -> None:
         """Publish unsolicited property pushes without waiting for a poll."""
+        self._last_push = datetime.now(UTC)
+        self._push_count += 1
         self._mark_success()
         self.async_set_updated_data(self._merge_properties(properties))
 
@@ -270,15 +342,26 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
 
     async def _async_update_data(self) -> dict[str, int]:
         async with self._operation_lock:
+            needs_full_snapshot = self.data is None or not self.connected
             try:
                 dev = await self._ensure_session()
-                properties = await dev.subscribe_and_read()
+                if needs_full_snapshot:
+                    properties = await dev.subscribe_and_read()
+                    self._full_snapshot_count += 1
+                else:
+                    # The initial snapshot already subscribed every surfaced property.
+                    # Pushes remain live, so one status read is enough to verify that the
+                    # persistent GATT session still responds. Re-subscribing all fourteen
+                    # properties on every watchdog tick needlessly disturbs the device.
+                    properties = await dev.read_many([PROP_STATUS])
+                    self._last_watchdog = datetime.now(UTC)
+                    self._watchdog_count += 1
             except KettleAuthError as err:
-                await self._drop()
+                await self._drop(record_disconnect=True)
                 self._record_auth_failure(err)
                 raise ConfigEntryAuthFailed("Kettle rejected the BLE beaconkey") from err
             except Exception as err:  # noqa: BLE001
-                await self._drop()
+                await self._drop(record_disconnect=True)
                 return self._handle_update_failure(err)
         self._mark_success()
         return self._merge_properties(properties)
@@ -290,11 +373,15 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         self._retry_not_before = 0.0
         self.update_interval = None
 
-    async def _drop(self) -> None:
+    async def _drop(self, *, record_disconnect: bool = False) -> None:
         client = self._client
         dev = self._dev
         self._client = None
         self._dev = None
+        if record_disconnect and client is not None:
+            self._record_disconnect()
+        elif client is not None:
+            self._connection_started_at = None
         self._dropping = True
         try:
             if dev is not None:
@@ -323,7 +410,7 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
                 dev = await self._ensure_session()
                 echo = await dev.set_property(*pair, value, VTYPE_U8)
             except KettleAuthError as err:
-                await self._drop()
+                await self._drop(record_disconnect=True)
                 self._record_auth_failure(err)
                 self.entry.async_start_reauth(self.hass)
                 raise HomeAssistantError(
@@ -331,7 +418,7 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
                     translation_key="authentication_failed",
                 ) from err
             except Exception as err:  # noqa: BLE001
-                await self._drop()
+                await self._drop(record_disconnect=True)
                 self._last_error = err
                 self._consecutive_failures += 1
                 self._retry_not_before = monotonic() + TRANSIENT_RETRY_INTERVAL

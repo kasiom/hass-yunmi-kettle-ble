@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
@@ -38,6 +39,32 @@ async def async_get_config_entry_diagnostics(
             "last_success": (
                 coordinator.last_success.isoformat() if coordinator.last_success else None
             ),
+            "last_rssi": coordinator.last_rssi,
+            "connection_started_at": (
+                coordinator.connection_started_at.isoformat()
+                if coordinator.connection_started_at
+                else None
+            ),
+            "connection_uptime_seconds": (
+                round(
+                    (datetime.now(UTC) - coordinator.connection_started_at).total_seconds(),
+                    1,
+                )
+                if coordinator.connection_started_at
+                else None
+            ),
+            "last_disconnect": (
+                coordinator.last_disconnect.isoformat() if coordinator.last_disconnect else None
+            ),
+            "last_push": (coordinator.last_push.isoformat() if coordinator.last_push else None),
+            "last_watchdog": (
+                coordinator.last_watchdog.isoformat() if coordinator.last_watchdog else None
+            ),
+            "connection_count": coordinator.connection_count,
+            "disconnect_count": coordinator.disconnect_count,
+            "full_snapshot_count": coordinator.full_snapshot_count,
+            "push_count": coordinator.push_count,
+            "watchdog_count": coordinator.watchdog_count,
             "consecutive_failures": coordinator.consecutive_failures,
             "reconnect_backoff_remaining": round(coordinator.reconnect_backoff_remaining, 1),
             "last_error_type": type(error).__name__ if error else None,
