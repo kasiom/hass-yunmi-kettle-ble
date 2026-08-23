@@ -123,6 +123,7 @@ def _load_coordinator():
     bluetooth.BluetoothCallbackMatcher = lambda **kwargs: kwargs
     bluetooth.BluetoothScanningMode = types.SimpleNamespace(PASSIVE="passive")
     bluetooth.BluetoothServiceInfoBleak = object
+    bluetooth.async_register_callback = lambda *_args, **_kwargs: lambda: None
     bluetooth.cleared_addresses = []
     bluetooth.async_clear_advertisement_history = lambda _hass, address: (
         bluetooth.cleared_addresses.append(address)
@@ -316,6 +317,20 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
         await asyncio.wait_for(refreshed.wait(), timeout=0.5)
         self.assertIsNone(coordinator._reconnect_task)
+
+    async def test_start_schedules_initial_refresh_without_cached_advertisement(self) -> None:
+        coordinator = self._coordinator()
+        refreshed = asyncio.Event()
+
+        async def _refresh() -> None:
+            refreshed.set()
+
+        coordinator.async_request_refresh = _refresh
+        coordinator.async_start()
+
+        await asyncio.wait_for(refreshed.wait(), timeout=0.5)
+        self.assertIsNone(coordinator._reconnect_task)
+        await coordinator.async_shutdown()
 
     async def test_invalid_beaconkey_triggers_config_entry_reauth(self) -> None:
         coordinator = self._coordinator()
