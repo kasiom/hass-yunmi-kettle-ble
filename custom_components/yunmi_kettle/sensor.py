@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, STATUS_NAMES
+from . import YunmiKettleConfigEntry
+from .const import STATUS_NAMES
 from .entity import YunmiKettleEntity
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, add: AddEntitiesCallback
+    hass: HomeAssistant, entry: YunmiKettleConfigEntry, add: AddEntitiesCallback
 ) -> None:
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
     add([KettleTemp(coordinator), KettleStatus(coordinator), KettleKeepwarmTarget(coordinator)])
 
 

@@ -22,6 +22,12 @@ class _Platform(StrEnum):
     SELECT = "select"
 
 
+class _ConfigEntry:
+    @classmethod
+    def __class_getitem__(cls, _item):
+        return cls
+
+
 def _load_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(
         name,
@@ -41,7 +47,7 @@ def _load_integration():
     const = types.ModuleType("homeassistant.const")
     const.Platform = _Platform
     config_entries = types.ModuleType("homeassistant.config_entries")
-    config_entries.ConfigEntry = object
+    config_entries.ConfigEntry = _ConfigEntry
     core = types.ModuleType("homeassistant.core")
     core.HomeAssistant = object
     homeassistant.const = const

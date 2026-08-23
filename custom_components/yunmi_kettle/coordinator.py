@@ -12,12 +12,13 @@ from bleak_retry_connector import establish_connection
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import (
     BluetoothCallbackMatcher,
+    BluetoothChange,
     BluetoothScanningMode,
     BluetoothServiceInfoBleak,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -38,7 +39,7 @@ from .const import (
     TRANSIENT_RETRY_INTERVAL,
     VTYPE_U8,
 )
-from .protocol import KettleError, YunmiKettle
+from .protocol import KettleAuthError, KettleError, YunmiKettle
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -119,21 +120,25 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
 
     @callback
     def _async_bluetooth_callback(
-        self, service_info: BluetoothServiceInfoBleak, _change: object
+        self, service_info: BluetoothServiceInfoBleak, _change: BluetoothChange
     ) -> None:
         self._last_advertisement = datetime.now(UTC)
-        if self.connected or monotonic() < self._retry_not_before:
+        if self.connected:
             return
         if self._reconnect_task is not None and not self._reconnect_task.done():
             return
         self._reconnect_task = self.hass.async_create_task(
-            self._async_refresh_after_advertisement(),
+            self._async_refresh_after_advertisement(self.reconnect_backoff_remaining),
             f"{DOMAIN} reconnect {service_info.address}",
         )
 
-    async def _async_refresh_after_advertisement(self) -> None:
+    async def _async_refresh_after_advertisement(self, delay: float) -> None:
+        """Refresh now, or after backoff, for an advertisement already observed."""
         try:
-            await self.async_request_refresh()
+            if delay:
+                await asyncio.sleep(delay)
+            if not self.connected:
+                await self.async_request_refresh()
         finally:
             self._reconnect_task = None
 
@@ -268,11 +273,22 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
             try:
                 dev = await self._ensure_session()
                 properties = await dev.subscribe_and_read()
+            except KettleAuthError as err:
+                await self._drop()
+                self._record_auth_failure(err)
+                raise ConfigEntryAuthFailed("Kettle rejected the BLE beaconkey") from err
             except Exception as err:  # noqa: BLE001
                 await self._drop()
                 return self._handle_update_failure(err)
         self._mark_success()
         return self._merge_properties(properties)
+
+    def _record_auth_failure(self, err: KettleAuthError) -> None:
+        """Stop automatic retries until Home Assistant completes reauthentication."""
+        self._last_error = err
+        self._consecutive_failures += 1
+        self._retry_not_before = 0.0
+        self.update_interval = None
 
     async def _drop(self) -> None:
         client = self._client
@@ -306,6 +322,14 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
             try:
                 dev = await self._ensure_session()
                 echo = await dev.set_property(*pair, value, VTYPE_U8)
+            except KettleAuthError as err:
+                await self._drop()
+                self._record_auth_failure(err)
+                self.entry.async_start_reauth(self.hass)
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="authentication_failed",
+                ) from err
             except Exception as err:  # noqa: BLE001
                 await self._drop()
                 self._last_error = err

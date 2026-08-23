@@ -9,6 +9,22 @@
           "token": "BLE token (24 hexadecimálních znaků)",
           "name": "Název",
           "poll_interval": "Kontrolní interval push dat (sekundy)"
+        },
+        "data_description": {
+          "mac": "Bluetooth MAC adresa konvice.",
+          "token": "24znakový BLE beaconkey; 32znakový MiIO token nefunguje.",
+          "name": "Název zařízení zobrazovaný v Home Assistantu.",
+          "poll_interval": "Záložní interval úplného načtení. Push aktualizace zůstávají okamžité."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Aktualizace BLE klíče konvice",
+        "description": "Konvice odmítla uložený BLE beaconkey. Zadejte aktuální 24znakový beaconkey, když je konvice zapnutá.",
+        "data": {
+          "token": "BLE token / beaconkey (24 hexadecimálních znaků)"
+        },
+        "data_description": {
+          "token": "Nový 24znakový BLE beaconkey je při psaní skrytý."
         }
       }
     },
@@ -64,6 +80,9 @@
   "exceptions": {
     "communication_failed": {
       "message": "Komunikace s konvicí selhala: {details}"
+    },
+    "authentication_failed": {
+      "message": "Konvice odmítla svůj BLE beaconkey. Byla zahájena reautentizace."
     }
   }
 }

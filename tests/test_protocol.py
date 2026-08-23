@@ -119,6 +119,7 @@ def _load_coordinator():
     sys.modules["bleak_retry_connector"] = bleak_retry
 
     bluetooth = types.ModuleType("homeassistant.components.bluetooth")
+    bluetooth.BluetoothChange = object
     bluetooth.BluetoothCallbackMatcher = lambda **kwargs: kwargs
     bluetooth.BluetoothScanningMode = types.SimpleNamespace(PASSIVE="passive")
     bluetooth.BluetoothServiceInfoBleak = object
@@ -141,6 +142,7 @@ def _load_coordinator():
     sys.modules["homeassistant.core"] = core
 
     exceptions = types.ModuleType("homeassistant.exceptions")
+    exceptions.ConfigEntryAuthFailed = type("ConfigEntryAuthFailed", (Exception,), {})
     exceptions.HomeAssistantError = Exception
     sys.modules["homeassistant.exceptions"] = exceptions
 
@@ -248,7 +250,10 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
             },
             options={},
         )
-        hass = types.SimpleNamespace(loop=asyncio.get_running_loop())
+        hass = types.SimpleNamespace(
+            loop=asyncio.get_running_loop(),
+            async_create_task=lambda coro, name: asyncio.create_task(coro, name=name),
+        )
         return coordinator_module.YunmiKettleCoordinator(hass, entry)
 
     async def test_property_mapping_preserves_profiles_and_units(self) -> None:
@@ -294,6 +299,35 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
             coordinator.address,
             sys.modules["homeassistant.components.bluetooth"].cleared_addresses,
         )
+
+    async def test_advertisement_during_backoff_schedules_delayed_refresh(self) -> None:
+        coordinator = self._coordinator()
+        refreshed = asyncio.Event()
+
+        async def _refresh() -> None:
+            refreshed.set()
+
+        coordinator.async_request_refresh = _refresh
+        coordinator._retry_not_before = coordinator_module.monotonic() + 0.02
+        coordinator._async_bluetooth_callback(
+            types.SimpleNamespace(address=coordinator.address),
+            None,
+        )
+
+        await asyncio.wait_for(refreshed.wait(), timeout=0.5)
+        self.assertIsNone(coordinator._reconnect_task)
+
+    async def test_invalid_beaconkey_triggers_config_entry_reauth(self) -> None:
+        coordinator = self._coordinator()
+
+        async def _invalid_session():
+            raise protocol.KettleAuthError("wrong key")
+
+        coordinator._ensure_session = _invalid_session
+        with self.assertRaises(sys.modules["homeassistant.exceptions"].ConfigEntryAuthFailed):
+            await coordinator._async_update_data()
+        self.assertIsNone(coordinator.update_interval)
+        self.assertIsInstance(coordinator.last_error, protocol.KettleAuthError)
 
 
 if __name__ == "__main__":
