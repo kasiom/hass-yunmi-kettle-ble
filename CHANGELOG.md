@@ -4,6 +4,8 @@
 
 - Keep a reconnect scheduled when an advertisement arrives during exponential backoff,
   preventing Home Assistant's duplicate-advertisement cache from stranding an online kettle.
+- Add one non-blocking initial connection probe when Bluetooth history is still empty after
+  an HA restart or a proxy reconnects later.
 - Load entities unavailable until the first complete BLE snapshot instead of forcing a setup
   connection when a mains-switched kettle is offline.
 - Store the coordinator in typed `ConfigEntry.runtime_data` and add a BLE beaconkey reauth flow.

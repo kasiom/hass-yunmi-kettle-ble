@@ -108,7 +108,7 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         return max(0.0, self._retry_not_before - monotonic())
 
     def async_start(self) -> None:
-        """Start watching advertisements so a powered-on kettle reconnects now."""
+        """Start watching advertisements and probe once without blocking setup."""
         if self._unregister_bluetooth is not None:
             return
         self._unregister_bluetooth = bluetooth.async_register_callback(
@@ -117,6 +117,15 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
             BluetoothCallbackMatcher(address=self.address, connectable=True),
             BluetoothScanningMode.PASSIVE,
         )
+        # Registration synchronously replays cached advertisements. If there was
+        # no cache yet (for example, an ESPHome proxy joined after this entry),
+        # still try once in the background. Some kettles do not resume advertising
+        # immediately after Home Assistant drops their previous GATT connection.
+        if self._reconnect_task is None:
+            self._reconnect_task = self.hass.async_create_task(
+                self._async_refresh_after_advertisement(0),
+                f"{DOMAIN} initial refresh {self.address}",
+            )
 
     @callback
     def _async_bluetooth_callback(
