@@ -9,11 +9,9 @@ This is, as far as we know, the **first working BLE driver for this exact model*
 existing project targets the older Mi Kettle GATT (`aa0x` characteristics) which the
 v14 does not have — it speaks MIoT-spec over the `0xFE95` service instead.
 
-> ⚠️ **Vibe-coded, use at your own risk.** This integration was reverse-engineered and
-> written end-to-end in an exploratory, "vibe coding" session (human + LLM, lots of HCI
-> snoop staring). It works on the author's kettle and is shared in case it's useful, but
-> it is **not** an official or hardened component. Expect rough edges; read the code
-> before trusting it. PRs welcome.
+> ⚠️ **Community-maintained, reverse-engineered integration.** It is not affiliated
+> with or endorsed by Xiaomi. Review the documentation and use it at your own risk.
+> Bug reports and pull requests are welcome.
 
 ## What changed in 0.3
 
