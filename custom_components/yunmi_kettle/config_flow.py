@@ -7,8 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
-from bleak import BleakClient
-from bleak_retry_connector import establish_connection
+from bleak_retry_connector import BleakClientWithServiceCache, clear_cache, establish_connection
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.config_entries import (
@@ -29,7 +28,7 @@ from .const import (
     DEFAULT_POLL_INTERVAL,
     DOMAIN,
 )
-from .protocol import KettleAuthError, YunmiKettle
+from .protocol import KettleAuthError, KettleGattError, YunmiKettle
 
 _MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 FE95 = "0000fe95-0000-1000-8000-00805f9b34fb"
@@ -62,15 +61,29 @@ async def _test_connection(hass, mac: str, token: str) -> str | None:
     ble_device = bluetooth.async_ble_device_from_address(hass, mac, connectable=True)
     if ble_device is None:
         return "cannot_connect"
-    client: BleakClient | None = None
+    client: BleakClientWithServiceCache | None = None
     dev: YunmiKettle | None = None
     try:
-        client = await establish_connection(BleakClient, ble_device, mac)
+        client = await establish_connection(
+            BleakClientWithServiceCache,
+            ble_device,
+            mac,
+            use_services_cache=True,
+            ble_device_callback=lambda: bluetooth.async_ble_device_from_address(
+                hass, mac, connectable=True
+            ),
+        )
         dev = YunmiKettle(client, bytes.fromhex(token))
         await dev.start()
         await dev.login()
     except KettleAuthError:
         return "invalid_auth"
+    except KettleGattError:
+        try:
+            await clear_cache(mac)
+        except Exception:  # noqa: BLE001 - cache removal is best effort
+            pass
+        return "cannot_connect"
     except Exception:  # noqa: BLE001
         return "cannot_connect"
     finally:
