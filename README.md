@@ -35,6 +35,10 @@ unique IDs, so upgrading does not require recreating dashboards, history or auto
 - Version 0.3.1 hardens backoff recovery, keeps entities unavailable until the first complete
   snapshot, moves runtime state to `ConfigEntry.runtime_data`, and offers a beaconkey reauth
   flow if the kettle rejects its saved key.
+- Version 0.3.3 validates the complete Yunmi GATT layout before login, clears an invalid
+  service cache once, and applies a long exponential quiet cooldown when the same structural
+  GATT failure repeats. This avoids waking a poorly covered kettle every five minutes while
+  retaining automatic recovery and an immediate retry after an integration reload.
 
 ---
 
