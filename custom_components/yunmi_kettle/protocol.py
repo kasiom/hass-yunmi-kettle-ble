@@ -30,6 +30,7 @@ from .const import (
     HDR_SEND_KEY,
     RCV_OK,
     RCV_RDY,
+    REQUIRED_GATT_UUIDS,
     RESP_INFO,
     RESP_KEY,
     UUID_AUTH,
@@ -51,6 +52,14 @@ class KettleError(Exception):
 
 class KettleAuthError(KettleError):
     """The configured BLE token did not authenticate the kettle."""
+
+
+class KettleGattError(KettleError):
+    """The connected device did not expose the required Yunmi GATT layout."""
+
+    def __init__(self, message: str, characteristics: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.characteristics = characteristics
 
 
 # --- crypto helpers -------------------------------------------------------
@@ -192,21 +201,37 @@ class YunmiKettle:
                 raise KettleError("timeout waiting for device response") from None
 
     async def start(self) -> None:
-        """Subscribe to the device's notify characteristics."""
+        """Validate the GATT table and subscribe to every protocol channel."""
         try:
             _LOGGER.debug("negotiated MTU = %s", self._c.mtu_size)
         except Exception as err:  # noqa: BLE001
             _LOGGER.debug("mtu_size unavailable: %s", err)
-        for s in self._c.services:
+        services = self._c.services
+        for s in services:
             for ch in s.characteristics:
                 _LOGGER.debug(
                     "GATT char %s handle=0x%04x props=%s", ch.uuid, ch.handle, ch.properties
                 )
-        for uuid in (UUID_UPNP, UUID_AUTH, UUID_MISERVICE_NOTIFY, UUID_MISERVICE_WRITE):
+
+        missing = tuple(
+            uuid[4:8] for uuid in REQUIRED_GATT_UUIDS if services.get_characteristic(uuid) is None
+        )
+        if missing:
+            raise KettleGattError(
+                f"required GATT characteristics are missing: {', '.join(missing)}",
+                missing,
+            )
+
+        for uuid in REQUIRED_GATT_UUIDS:
             try:
                 await self._c.start_notify(uuid, self._on_notify)
             except Exception as err:  # noqa: BLE001 - char may not be notifiable
-                _LOGGER.debug("start_notify %s failed: %s", uuid, err)
+                short_uuid = uuid[4:8]
+                raise KettleGattError(
+                    f"could not enable notifications for GATT characteristic {short_uuid} "
+                    f"({type(err).__name__})",
+                    (short_uuid,),
+                ) from err
 
     async def _write(self, uuid: str, data: bytes, response: bool = False) -> None:
         _LOGGER.debug("write %s -> %s", uuid, data.hex())
