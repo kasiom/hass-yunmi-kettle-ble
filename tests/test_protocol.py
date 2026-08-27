@@ -24,12 +24,59 @@ class _Platform(StrEnum):
     SELECT = "select"
 
 
+def _uuid(short: str) -> str:
+    return f"0000{short}-0000-1000-8000-00805f9b34fb"
+
+
+class _FakeCharacteristic:
+    def __init__(self, uuid: str, handle: int) -> None:
+        self.uuid = uuid
+        self.handle = handle
+        self.properties = ["notify", "write-without-response"]
+
+
+class _FakeService:
+    def __init__(self, characteristics: list[_FakeCharacteristic]) -> None:
+        self.characteristics = characteristics
+
+
+class _FakeServices(list):
+    def get_characteristic(self, uuid: str):
+        for service in self:
+            for characteristic in service.characteristics:
+                if characteristic.uuid == uuid:
+                    return characteristic
+        return None
+
+
 class _FakeBleakClient:
-    def __init__(self) -> None:
+    def __init__(self, characteristics: tuple[str, ...] | None = None) -> None:
         self.writes: list[tuple[str, bytes, bool]] = []
+        self.notifications: list[str] = []
+        self.mtu_size = 23
+        self.is_connected = True
+        characteristic_uuids = characteristics or tuple(
+            _uuid(short) for short in ("0010", "0019", "001a", "001b")
+        )
+        self.services = _FakeServices(
+            [
+                _FakeService(
+                    [
+                        _FakeCharacteristic(uuid, index + 1)
+                        for index, uuid in enumerate(characteristic_uuids)
+                    ]
+                )
+            ]
+        )
 
     async def write_gatt_char(self, uuid: str, data: bytes, *, response: bool = False) -> None:
         self.writes.append((uuid, bytes(data), response))
+
+    async def start_notify(self, uuid: str, _callback) -> None:
+        self.notifications.append(uuid)
+
+    async def disconnect(self) -> None:
+        self.is_connected = False
 
 
 def _load_module(name: str, path: Path):
@@ -115,7 +162,12 @@ def _load_coordinator():
     async def _establish_connection(*_args, **_kwargs):
         raise AssertionError("not used by these tests")
 
+    async def _clear_cache(_address):
+        return True
+
     bleak_retry.establish_connection = _establish_connection
+    bleak_retry.clear_cache = _clear_cache
+    bleak_retry.BleakClientWithServiceCache = _FakeBleakClient
     sys.modules["bleak_retry_connector"] = bleak_retry
 
     bluetooth = types.ModuleType("homeassistant.components.bluetooth")
@@ -124,6 +176,9 @@ def _load_coordinator():
     bluetooth.BluetoothScanningMode = types.SimpleNamespace(PASSIVE="passive")
     bluetooth.BluetoothServiceInfoBleak = object
     bluetooth.cleared_addresses = []
+    bluetooth.async_ble_device_from_address = lambda *_args, **_kwargs: object()
+    bluetooth.async_register_callback = lambda *_args, **_kwargs: lambda: None
+    bluetooth.async_track_unavailable = lambda *_args, **_kwargs: lambda: None
     bluetooth.async_clear_advertisement_history = lambda _hass, address: (
         bluetooth.cleared_addresses.append(address)
     )
@@ -208,6 +263,23 @@ class ProtocolNotificationTests(unittest.IsolatedAsyncioTestCase):
             self.client.writes,
             [(self.kettle._notify_uuid, protocol.ACK_DATA, False)],
         )
+
+    async def test_start_validates_and_subscribes_all_required_characteristics(self) -> None:
+        await self.kettle.start()
+
+        self.assertEqual(self.client.notifications, list(protocol.REQUIRED_GATT_UUIDS))
+
+    async def test_start_reports_the_exact_missing_characteristic(self) -> None:
+        client = _FakeBleakClient(
+            tuple(uuid for uuid in protocol.REQUIRED_GATT_UUIDS if uuid != protocol.UUID_UPNP)
+        )
+        kettle = protocol.YunmiKettle(client, bytes.fromhex("00112233445566778899aabb"))
+
+        with self.assertRaisesRegex(protocol.KettleGattError, "0010") as raised:
+            await kettle.start()
+
+        self.assertEqual(raised.exception.characteristics, ("0010",))
+        self.assertEqual(client.notifications, [])
 
     async def test_wait_for_properties_requires_a_new_version(self) -> None:
         pair = (3, 6)
@@ -373,6 +445,76 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         )
 
         await asyncio.wait_for(refreshed.wait(), timeout=0.5)
+        self.assertIsNone(coordinator._reconnect_task)
+
+    async def test_missing_gatt_table_clears_cache_before_disconnect(self) -> None:
+        coordinator = self._coordinator()
+        client = _FakeBleakClient(
+            tuple(uuid for uuid in protocol.REQUIRED_GATT_UUIDS if uuid != protocol.UUID_UPNP)
+        )
+        original_establish_connection = coordinator_module.establish_connection
+        original_clear_cache = coordinator_module.clear_cache
+        connection_call = {}
+        cleared_addresses = []
+
+        async def _connect(client_class, _device, _name, **kwargs):
+            connection_call["client_class"] = client_class
+            connection_call["kwargs"] = kwargs
+            return client
+
+        async def _clear_cache(address):
+            cleared_addresses.append(address)
+            return True
+
+        coordinator_module.establish_connection = _connect
+        coordinator_module.clear_cache = _clear_cache
+        try:
+            with self.assertRaisesRegex(protocol.KettleGattError, "0010"):
+                await coordinator._ensure_session()
+        finally:
+            coordinator_module.establish_connection = original_establish_connection
+            coordinator_module.clear_cache = original_clear_cache
+
+        self.assertIs(connection_call["client_class"], _FakeBleakClient)
+        self.assertTrue(connection_call["kwargs"]["use_services_cache"])
+        self.assertEqual(cleared_addresses, [coordinator.address])
+        self.assertFalse(client.is_connected)
+        self.assertEqual(coordinator.connection_attempt_count, 1)
+        self.assertEqual(coordinator.service_cache_clear_count, 1)
+
+    async def test_repeated_gatt_failures_enter_exponential_quiet_mode(self) -> None:
+        coordinator = self._coordinator()
+        error = protocol.KettleGattError(
+            "required GATT characteristics are missing: 0010",
+            ("0010",),
+        )
+
+        with self.assertRaises(_UpdateFailed):
+            coordinator._handle_update_failure(error)
+        first_delay = coordinator.reconnect_backoff_remaining
+        self.assertGreater(first_delay, 29)
+        self.assertLessEqual(first_delay, coordinator_module.GATT_RETRY_INTERVAL)
+        self.assertFalse(coordinator.gatt_quiet_mode)
+
+        with self.assertRaises(_UpdateFailed):
+            coordinator._handle_update_failure(error)
+        quiet_delay = coordinator.reconnect_backoff_remaining
+        self.assertGreater(quiet_delay, 29 * 60)
+        self.assertLessEqual(quiet_delay, coordinator_module.GATT_QUIET_RETRY_INTERVAL)
+        self.assertTrue(coordinator.gatt_quiet_mode)
+        self.assertEqual(coordinator.gatt_failure_streak, 2)
+
+    async def test_unavailable_kettle_cancels_a_delayed_reconnect(self) -> None:
+        coordinator = self._coordinator()
+        coordinator._bluetooth_available = True
+        reconnect_task = asyncio.create_task(asyncio.sleep(60))
+        coordinator._reconnect_task = reconnect_task
+
+        coordinator._async_bluetooth_unavailable(types.SimpleNamespace())
+        await asyncio.gather(reconnect_task, return_exceptions=True)
+
+        self.assertFalse(coordinator.bluetooth_available)
+        self.assertTrue(reconnect_task.cancelled())
         self.assertIsNone(coordinator._reconnect_task)
 
     async def test_invalid_beaconkey_triggers_config_entry_reauth(self) -> None:
