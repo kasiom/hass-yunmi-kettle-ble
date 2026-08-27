@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from . import YunmiKettleConfigEntry
 from .const import CONF_MAC, CONF_TOKEN
+from .protocol import KettleError
 
 TO_REDACT = {CONF_MAC, CONF_TOKEN}
 
@@ -29,6 +30,7 @@ async def async_get_config_entry_diagnostics(
         },
         "coordinator": {
             "connected": coordinator.connected,
+            "bluetooth_available": coordinator.bluetooth_available,
             "poll_interval": coordinator.poll_interval,
             "last_update_success": coordinator.last_update_success,
             "last_advertisement": (
@@ -61,13 +63,18 @@ async def async_get_config_entry_diagnostics(
                 coordinator.last_watchdog.isoformat() if coordinator.last_watchdog else None
             ),
             "connection_count": coordinator.connection_count,
+            "connection_attempt_count": coordinator.connection_attempt_count,
             "disconnect_count": coordinator.disconnect_count,
+            "service_cache_clear_count": coordinator.service_cache_clear_count,
             "full_snapshot_count": coordinator.full_snapshot_count,
             "push_count": coordinator.push_count,
             "watchdog_count": coordinator.watchdog_count,
             "consecutive_failures": coordinator.consecutive_failures,
+            "gatt_failure_streak": coordinator.gatt_failure_streak,
+            "gatt_quiet_mode": coordinator.gatt_quiet_mode,
             "reconnect_backoff_remaining": round(coordinator.reconnect_backoff_remaining, 1),
             "last_error_type": type(error).__name__ if error else None,
+            "last_error_message": str(error) if isinstance(error, KettleError) else None,
             "data": dict(coordinator.data or {}),
         },
     }
