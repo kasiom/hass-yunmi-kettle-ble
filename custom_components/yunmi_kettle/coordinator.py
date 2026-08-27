@@ -7,8 +7,11 @@ import logging
 from datetime import UTC, datetime, timedelta
 from time import monotonic
 
-from bleak import BleakClient
-from bleak_retry_connector import establish_connection
+from bleak_retry_connector import (
+    BleakClientWithServiceCache,
+    clear_cache,
+    establish_connection,
+)
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import (
     BluetoothCallbackMatcher,
@@ -28,6 +31,10 @@ from .const import (
     DEFAULT_POLL_INTERVAL,
     DOMAIN,
     DURATION_UNIT_MIN,
+    GATT_FAILURES_BEFORE_QUIET,
+    GATT_QUIET_RETRY_INTERVAL,
+    GATT_RETRY_INTERVAL,
+    MAX_GATT_QUIET_BACKOFF,
     MAX_RECONNECT_BACKOFF,
     PROFILE_COUNT,
     PROP_ACTIVE_PROFILE,
@@ -39,7 +46,7 @@ from .const import (
     TRANSIENT_RETRY_INTERVAL,
     VTYPE_U8,
 )
-from .protocol import KettleAuthError, KettleError, YunmiKettle
+from .protocol import KettleAuthError, KettleError, KettleGattError, YunmiKettle
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -65,14 +72,17 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
             update_interval=timedelta(seconds=self.poll_interval),
             always_update=False,
         )
-        self._client: BleakClient | None = None
+        self._client: BleakClientWithServiceCache | None = None
         self._dev: YunmiKettle | None = None
         self._operation_lock = asyncio.Lock()
         self._unregister_bluetooth = None
+        self._unregister_unavailable = None
         self._reconnect_task: asyncio.Task[None] | None = None
         self._dropping = False
         self._consecutive_failures = 0
+        self._gatt_failure_streak = 0
         self._retry_not_before = 0.0
+        self._bluetooth_available = False
         self._last_advertisement: datetime | None = None
         self._last_success: datetime | None = None
         self._last_error: Exception | None = None
@@ -82,7 +92,9 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         self._last_push: datetime | None = None
         self._last_watchdog: datetime | None = None
         self._connection_count = 0
+        self._connection_attempt_count = 0
         self._disconnect_count = 0
+        self._service_cache_clear_count = 0
         self._full_snapshot_count = 0
         self._push_count = 0
         self._watchdog_count = 0
@@ -138,6 +150,11 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         return self._connection_count
 
     @property
+    def connection_attempt_count(self) -> int:
+        """Return BLE connection attempts since entry setup."""
+        return self._connection_attempt_count
+
+    @property
     def disconnect_count(self) -> int:
         """Return unexpected or error-driven disconnects since entry setup."""
         return self._disconnect_count
@@ -163,6 +180,29 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         return self._consecutive_failures
 
     @property
+    def gatt_failure_streak(self) -> int:
+        """Return consecutive failures caused by an incomplete GATT table."""
+        return self._gatt_failure_streak
+
+    @property
+    def gatt_quiet_mode(self) -> bool:
+        """Return whether repeated GATT failures activated the quiet cooldown."""
+        return (
+            self._gatt_failure_streak >= GATT_FAILURES_BEFORE_QUIET
+            and self.reconnect_backoff_remaining > 0
+        )
+
+    @property
+    def service_cache_clear_count(self) -> int:
+        """Return successful invalid GATT service-cache removals."""
+        return self._service_cache_clear_count
+
+    @property
+    def bluetooth_available(self) -> bool:
+        """Return whether a connectable scanner currently sees the kettle."""
+        return self._bluetooth_available
+
+    @property
     def reconnect_backoff_remaining(self) -> float:
         """Return seconds until an advertisement may trigger another attempt."""
         return max(0.0, self._retry_not_before - monotonic())
@@ -177,11 +217,18 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
             BluetoothCallbackMatcher(address=self.address, connectable=True),
             BluetoothScanningMode.PASSIVE,
         )
+        self._unregister_unavailable = bluetooth.async_track_unavailable(
+            self.hass,
+            self._async_bluetooth_unavailable,
+            self.address,
+            connectable=True,
+        )
 
     @callback
     def _async_bluetooth_callback(
         self, service_info: BluetoothServiceInfoBleak, _change: BluetoothChange
     ) -> None:
+        self._bluetooth_available = True
         self._last_advertisement = datetime.now(UTC)
         self._last_rssi = getattr(service_info, "rssi", None)
         if self.connected:
@@ -193,6 +240,17 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
             f"{DOMAIN} reconnect {service_info.address}",
         )
 
+    @callback
+    def _async_bluetooth_unavailable(self, _service_info: BluetoothServiceInfoBleak) -> None:
+        """Cancel a pending retry when no connectable scanner sees the kettle."""
+        self._bluetooth_available = False
+        if self.connected:
+            return
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            reconnect_task = self._reconnect_task
+            self._reconnect_task = None
+            reconnect_task.cancel()
+
     async def _async_refresh_after_advertisement(self, delay: float) -> None:
         """Refresh now, or after backoff, for an advertisement already observed."""
         try:
@@ -201,13 +259,14 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
             if not self.connected:
                 await self.async_request_refresh()
         finally:
-            self._reconnect_task = None
+            if self._reconnect_task is asyncio.current_task():
+                self._reconnect_task = None
 
-    def _disconnected_callback(self, client: BleakClient) -> None:
+    def _disconnected_callback(self, client: BleakClientWithServiceCache) -> None:
         self.hass.loop.call_soon_threadsafe(self._async_schedule_disconnected, client)
 
     @callback
-    def _async_schedule_disconnected(self, client: BleakClient) -> None:
+    def _async_schedule_disconnected(self, client: BleakClientWithServiceCache) -> None:
         if self._dropping or client is not self._client:
             return
         self.hass.async_create_task(
@@ -215,7 +274,7 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
             f"{DOMAIN} disconnected {self.address}",
         )
 
-    async def _async_handle_disconnected(self, client: BleakClient) -> None:
+    async def _async_handle_disconnected(self, client: BleakClientWithServiceCache) -> None:
         if client is not self._client:
             return
         dev = self._dev
@@ -243,17 +302,24 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         if ble_device is None:
             raise KettleError("device is not in range of a Bluetooth adapter or proxy")
 
+        self._connection_attempt_count += 1
         client = await establish_connection(
-            BleakClient,
+            BleakClientWithServiceCache,
             ble_device,
             self.address,
             disconnected_callback=self._disconnected_callback,
+            use_services_cache=True,
+            ble_device_callback=lambda: bluetooth.async_ble_device_from_address(
+                self.hass, self.address, connectable=True
+            ),
         )
         dev = YunmiKettle(client, self._token, self._async_handle_push)
         try:
             await dev.start()
             await dev.login()
-        except Exception:
+        except Exception as err:
+            if isinstance(err, KettleGattError) and self._gatt_failure_streak == 0:
+                await self._async_clear_service_cache()
             await dev.async_stop()
             try:
                 await client.disconnect()
@@ -265,6 +331,14 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         self._connection_started_at = datetime.now(UTC)
         self._connection_count += 1
         return dev
+
+    async def _async_clear_service_cache(self) -> None:
+        """Remove an incomplete GATT service table before the next connection."""
+        try:
+            if await clear_cache(self.address):
+                self._service_cache_clear_count += 1
+        except Exception as err:  # noqa: BLE001 - cache removal is best effort
+            _LOGGER.debug("Could not clear kettle GATT service cache: %s", err)
 
     def _record_disconnect(self) -> None:
         """Record the end of a session without exposing adapter identifiers."""
@@ -308,25 +382,55 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         self._last_success = datetime.now(UTC)
         self._last_error = None
         self._consecutive_failures = 0
+        self._gatt_failure_streak = 0
         self._retry_not_before = 0.0
         self.update_interval = timedelta(seconds=self.poll_interval)
 
-    def _handle_update_failure(self, err: Exception) -> dict[str, int]:
+    def _record_failure_backoff(self, err: Exception) -> tuple[float, bool]:
+        """Record one failure and return its retry delay and quiet-mode state."""
         self._last_error = err
         self._consecutive_failures += 1
+        if isinstance(err, KettleGattError):
+            self._gatt_failure_streak += 1
+            if self._gatt_failure_streak >= GATT_FAILURES_BEFORE_QUIET:
+                quiet_exponent = self._gatt_failure_streak - GATT_FAILURES_BEFORE_QUIET
+                delay = min(
+                    GATT_QUIET_RETRY_INTERVAL * 2**quiet_exponent,
+                    MAX_GATT_QUIET_BACKOFF,
+                )
+                quiet = True
+            else:
+                delay = GATT_RETRY_INTERVAL
+                quiet = False
+        else:
+            self._gatt_failure_streak = 0
+            delay = min(
+                TRANSIENT_RETRY_INTERVAL * 2 ** (self._consecutive_failures - 1),
+                MAX_RECONNECT_BACKOFF,
+            )
+            quiet = False
+        self._retry_not_before = monotonic() + delay
+        return delay, quiet
+
+    def _handle_update_failure(self, err: Exception) -> dict[str, int]:
+        delay, quiet = self._record_failure_backoff(err)
         # HA de-duplicates identical advertisements. Forget the last packet so
         # switching the kettle's smart plug back on always wakes this entry.
         self._clear_advertisement_history()
-        delay = min(
-            TRANSIENT_RETRY_INTERVAL * 2 ** (self._consecutive_failures - 1),
-            MAX_RECONNECT_BACKOFF,
-        )
-        self._retry_not_before = monotonic() + delay
+        if quiet:
+            self.update_interval = None
+            _LOGGER.warning(
+                "Kettle GATT table is still incomplete; automatic BLE retries are quiet "
+                "for %s seconds: %s",
+                round(delay),
+                err,
+            )
+            raise UpdateFailed(str(err)) from err
         if self.data is not None and self._consecutive_failures == 1:
-            self.update_interval = timedelta(seconds=TRANSIENT_RETRY_INTERVAL)
+            self.update_interval = timedelta(seconds=delay)
             _LOGGER.warning(
                 "Temporary kettle communication failure; retrying in %s seconds: %s",
-                TRANSIENT_RETRY_INTERVAL,
+                round(delay),
                 err,
             )
             return dict(self.data)
@@ -370,6 +474,7 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         """Stop automatic retries until Home Assistant completes reauthentication."""
         self._last_error = err
         self._consecutive_failures += 1
+        self._gatt_failure_streak = 0
         self._retry_not_before = 0.0
         self.update_interval = None
 
@@ -398,6 +503,9 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         if self._unregister_bluetooth is not None:
             self._unregister_bluetooth()
             self._unregister_bluetooth = None
+        if self._unregister_unavailable is not None:
+            self._unregister_unavailable()
+            self._unregister_unavailable = None
         if self._reconnect_task is not None and not self._reconnect_task.done():
             self._reconnect_task.cancel()
             await asyncio.gather(self._reconnect_task, return_exceptions=True)
@@ -419,9 +527,10 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
                 ) from err
             except Exception as err:  # noqa: BLE001
                 await self._drop(record_disconnect=True)
-                self._last_error = err
-                self._consecutive_failures += 1
-                self._retry_not_before = monotonic() + TRANSIENT_RETRY_INTERVAL
+                _, quiet = self._record_failure_backoff(err)
+                if quiet:
+                    self.update_interval = None
+                self._clear_advertisement_history()
                 raise HomeAssistantError(
                     translation_domain=DOMAIN,
                     translation_key="communication_failed",
