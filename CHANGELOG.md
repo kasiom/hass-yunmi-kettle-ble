@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.3
+
+- Validate all four required Yunmi GATT characteristics before login and report the exact
+  missing or unusable channel instead of continuing with a partial service table.
+- Use `BleakClientWithServiceCache`, clear an invalid service cache after a GATT-layout
+  failure, and ask Home Assistant for the current best connectable path on every attempt.
+- Enter an exponential quiet cooldown after repeated GATT-layout failures: retry once after
+  30 seconds, then after 30 minutes, 1 hour, 2 hours, 4 hours, and at most every 6 hours.
+  This prevents an unreachable or weakly covered kettle from beeping every five minutes.
+- Cancel delayed reconnects while no connectable Bluetooth scanner sees the kettle.
+- Extend redacted diagnostics with Bluetooth availability, connection attempts, cache clears,
+  the GATT failure streak, quiet-mode state, and a safe protocol error message.
+
 ## 0.3.2
 
 - Replace the repeated fourteen-property watchdog snapshot with one lightweight status read;
