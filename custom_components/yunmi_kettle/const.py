@@ -17,6 +17,13 @@ DEFAULT_NAME = "Mi Kettle"
 DEFAULT_POLL_INTERVAL = 300
 TRANSIENT_RETRY_INTERVAL = 10
 MAX_RECONNECT_BACKOFF = 300
+# A missing GATT table is different from an ordinary transient disconnect. Clear
+# the service cache once, then back off aggressively so a powered kettle is not
+# woken (and does not beep) every few minutes by an unusable connection path.
+GATT_RETRY_INTERVAL = 30
+GATT_FAILURES_BEFORE_QUIET = 2
+GATT_QUIET_RETRY_INTERVAL = 30 * 60
+MAX_GATT_QUIET_BACKOFF = 6 * 60 * 60
 MIN_TEMP = 40
 MAX_TEMP = 95
 
@@ -36,9 +43,12 @@ UUID_UPNP = _u("0010")  # login / control channel
 UUID_AUTH = _u("0019")  # framed handshake channel
 UUID_MISERVICE_WRITE = _u("001a")  # app -> device property write/request (handle 0x0021)
 UUID_MISERVICE_NOTIFY = _u("001b")  # device -> app property notify/response (handle 0x0025)
-# Fallbacks tried at runtime if the above don't match the device's GATT layout.
-UUID_NOTIFY_CANDIDATES = [_u("0018"), _u("0017"), _u("001a"), _u("001b")]
-UUID_WRITE_CANDIDATES = [_u("0017"), _u("0018"), _u("001a"), _u("001b")]
+REQUIRED_GATT_UUIDS = (
+    UUID_UPNP,
+    UUID_AUTH,
+    UUID_MISERVICE_WRITE,
+    UUID_MISERVICE_NOTIFY,
+)
 
 # --- handshake commands (Xiaomi "mi" standard login) ---
 CMD_LOGIN = bytes.fromhex("24000000")
