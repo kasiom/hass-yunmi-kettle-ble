@@ -17,6 +17,10 @@ DEFAULT_NAME = "Mi Kettle"
 DEFAULT_POLL_INTERVAL = 300
 TRANSIENT_RETRY_INTERVAL = 10
 MAX_RECONNECT_BACKOFF = 300
+# Keep the last confirmed values through one short RF dropout. This is long
+# enough for one advertisement-driven reconnect, but short enough that a
+# mains-switched kettle still becomes unavailable promptly.
+DISCONNECT_GRACE_PERIOD = 30
 # A missing GATT table is different from an ordinary transient disconnect. Clear
 # the service cache once, then back off aggressively so a powered kettle is not
 # woken (and does not beep) every few minutes by an unusable connection path.

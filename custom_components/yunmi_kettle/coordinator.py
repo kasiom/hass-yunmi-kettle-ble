@@ -29,6 +29,7 @@ from .const import (
     CONF_POLL_INTERVAL,
     CONF_TOKEN,
     DEFAULT_POLL_INTERVAL,
+    DISCONNECT_GRACE_PERIOD,
     DOMAIN,
     DURATION_UNIT_MIN,
     GATT_FAILURES_BEFORE_QUIET,
@@ -78,6 +79,8 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         self._unregister_bluetooth = None
         self._unregister_unavailable = None
         self._reconnect_task: asyncio.Task[None] | None = None
+        self._disconnect_grace_task: asyncio.Task[None] | None = None
+        self._disconnect_grace_deadline = 0.0
         self._dropping = False
         self._consecutive_failures = 0
         self._gatt_failure_streak = 0
@@ -207,6 +210,20 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         """Return seconds until an advertisement may trigger another attempt."""
         return max(0.0, self._retry_not_before - monotonic())
 
+    @property
+    def disconnect_grace_remaining(self) -> float:
+        """Return seconds before a transient disconnect marks data unavailable."""
+        return max(0.0, self._disconnect_grace_deadline - monotonic())
+
+    @property
+    def disconnect_grace_active(self) -> bool:
+        """Return whether confirmed data is being held through a brief dropout."""
+        return (
+            not self.connected
+            and self.data is not None
+            and self.disconnect_grace_remaining > 0
+        )
+
     def async_start(self) -> None:
         """Start watching advertisements so a powered-on kettle reconnects now."""
         if self._unregister_bluetooth is not None:
@@ -286,11 +303,49 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         error = KettleError("BLE connection closed")
         self._last_error = error
         self._consecutive_failures += 1
+        self._gatt_failure_streak = 0
+        delay = min(
+            TRANSIENT_RETRY_INTERVAL * 2 ** (self._consecutive_failures - 1),
+            MAX_RECONNECT_BACKOFF,
+        )
+        self._retry_not_before = monotonic() + delay
         self.update_interval = None
         self._clear_advertisement_history()
         # Do not start a long connection attempt against a kettle whose smart
         # plug was just switched off. The next real advertisement reconnects it.
-        self.async_set_update_error(error)
+        if self.data is None:
+            self.async_set_update_error(error)
+            return
+        self._start_disconnect_grace(error)
+
+    def _start_disconnect_grace(self, error: Exception) -> None:
+        """Debounce a brief weak-signal disconnect without hiding a real outage."""
+        self._cancel_disconnect_grace()
+        self._disconnect_grace_deadline = monotonic() + DISCONNECT_GRACE_PERIOD
+        self._disconnect_grace_task = self.hass.async_create_task(
+            self._async_expire_disconnect_grace(error),
+            f"{DOMAIN} disconnect grace {self.address}",
+        )
+
+    def _cancel_disconnect_grace(self) -> None:
+        """Cancel a pending availability downgrade after recovery or shutdown."""
+        task = self._disconnect_grace_task
+        self._disconnect_grace_task = None
+        self._disconnect_grace_deadline = 0.0
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+
+    async def _async_expire_disconnect_grace(self, error: Exception) -> None:
+        """Mark stale data unavailable if the session does not recover in time."""
+        task = asyncio.current_task()
+        try:
+            await asyncio.sleep(DISCONNECT_GRACE_PERIOD)
+            if not self.connected:
+                self.async_set_update_error(self._last_error or error)
+        finally:
+            if self._disconnect_grace_task is task:
+                self._disconnect_grace_task = None
+                self._disconnect_grace_deadline = 0.0
 
     async def _ensure_session(self) -> YunmiKettle:
         if self.connected:
@@ -379,6 +434,7 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         self.async_set_updated_data(self._merge_properties(properties))
 
     def _mark_success(self) -> None:
+        self._cancel_disconnect_grace()
         self._last_success = datetime.now(UTC)
         self._last_error = None
         self._consecutive_failures = 0
@@ -426,6 +482,15 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
                 err,
             )
             raise UpdateFailed(str(err)) from err
+        if self.data is not None and self.disconnect_grace_active:
+            self.update_interval = None
+            _LOGGER.warning(
+                "Temporary kettle reconnect failure; keeping the last confirmed data "
+                "for %.0f more seconds and retrying from advertisements: %s",
+                self.disconnect_grace_remaining,
+                err,
+            )
+            return dict(self.data)
         if self.data is not None and self._consecutive_failures == 1:
             self.update_interval = timedelta(seconds=delay)
             _LOGGER.warning(
@@ -472,6 +537,7 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
 
     def _record_auth_failure(self, err: KettleAuthError) -> None:
         """Stop automatic retries until Home Assistant completes reauthentication."""
+        self._cancel_disconnect_grace()
         self._last_error = err
         self._consecutive_failures += 1
         self._gatt_failure_streak = 0
@@ -509,6 +575,10 @@ class YunmiKettleCoordinator(DataUpdateCoordinator[dict[str, int]]):
         if self._reconnect_task is not None and not self._reconnect_task.done():
             self._reconnect_task.cancel()
             await asyncio.gather(self._reconnect_task, return_exceptions=True)
+        grace_task = self._disconnect_grace_task
+        self._cancel_disconnect_grace()
+        if grace_task is not None:
+            await asyncio.gather(grace_task, return_exceptions=True)
         await super().async_shutdown()
         await self._drop()
 

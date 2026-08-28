@@ -38,7 +38,12 @@ unique IDs, so upgrading does not require recreating dashboards, history or auto
 - Version 0.3.3 validates the complete Yunmi GATT layout before login, clears an invalid
   service cache once, and applies a long exponential quiet cooldown when the same structural
   GATT failure repeats. This avoids waking a poorly covered kettle every five minutes while
-  retaining automatic recovery and an immediate retry after an integration reload.
+  preserving automatic recovery when a usable Bluetooth path returns.
+- Version 0.3.4 falls back to a direct property read when a restored subscription does not
+  replay its current value. This prevents a successful login from turning into a reconnect
+  loop. Short RF disconnects keep the last confirmed values for a 30-second recovery window;
+  a failed recovery or a powered-off kettle still becomes unavailable. This release also adds
+  custom Mi Smart Kettle Pro artwork.
 
 ---
 
@@ -103,8 +108,9 @@ UI is localised in **Czech**, **English** and **Russian**.
    the extractor (do this yourself — never paste your Xiaomi password anywhere else), find
    the kettle, and copy its **MAC** (`AA:BB:CC:DD:EE:FF`) and its **token / beaconkey**
    (24 hex characters). The kettle must already be bound to your Mi Home account once.
-3. **Install the component.** Home Assistant 2025.3 or newer is required. Add this
-   repository as a custom **Integration** repository in HACS, install *Yunmi Kettle*,
+3. **Install the component.** Home Assistant 2025.3 or newer is required. Add
+   `https://github.com/kasiom/hass-yunmi-kettle-ble` as a custom **Integration** repository
+   in HACS, install *Yunmi Kettle*,
    and restart Home Assistant. A manual copy of `custom_components/yunmi_kettle/` into
    `config/custom_components/` works as well.
 4. **Add the integration.** Settings → Devices & Services → **Add Integration** →

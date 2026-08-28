@@ -293,6 +293,32 @@ class ProtocolNotificationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(await waiter, {pair: 21})
 
+    async def test_subscribe_read_falls_back_to_direct_read_after_timeout(self) -> None:
+        pair = (2, 1)
+        subscribed: list[list[tuple[int, int]]] = []
+        direct_reads: list[tuple[list[tuple[int, int]], float]] = []
+
+        async def _send_subscribe(pairs: list[tuple[int, int]]) -> None:
+            subscribed.append(pairs)
+
+        async def _wait_for_properties(*_args, **_kwargs):
+            raise protocol.KettlePropertyTimeout(
+                "timeout waiting for properties: [(2, 1)]"
+            )
+
+        async def _read_many(pairs: list[tuple[int, int]], timeout: float = 4.0):
+            direct_reads.append((pairs, timeout))
+            return {pair: 0}
+
+        self.kettle.SUBSCRIBE_PAIRS = [pair]
+        self.kettle._send_subscribe = _send_subscribe
+        self.kettle._wait_for_properties = _wait_for_properties
+        self.kettle.read_many = _read_many
+
+        self.assertEqual(await self.kettle.subscribe_and_read(), {pair: 0})
+        self.assertEqual(subscribed, [[pair]])
+        self.assertEqual(direct_reads, [([pair], 4.0)])
+
     async def test_write_confirmation_ignores_an_old_value(self) -> None:
         pair = (5, 5)
         waiter = asyncio.create_task(self.kettle._wait_for_confirmed_value(pair, 90, 0, timeout=1))
@@ -402,7 +428,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(coordinator.last_watchdog)
         self.assertEqual(coordinator.watchdog_count, 0)
 
-    async def test_disconnect_marks_unavailable_and_waits_for_advertisement(self) -> None:
+    async def test_disconnect_keeps_confirmed_data_available_during_grace(self) -> None:
         coordinator = self._coordinator()
         client = types.SimpleNamespace(is_connected=False)
 
@@ -415,6 +441,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         device = _Device()
         coordinator._client = client
         coordinator._dev = device
+        coordinator.data = {"status": 0, "current_temp": 25}
 
         await coordinator._async_handle_disconnected(client)
 
@@ -423,12 +450,72 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(coordinator.update_interval)
         self.assertEqual(coordinator.disconnect_count, 1)
         self.assertIsNotNone(coordinator.last_disconnect)
-        self.assertFalse(coordinator.last_update_success)
-        self.assertIsInstance(coordinator.last_exception, protocol.KettleError)
+        self.assertTrue(coordinator.last_update_success)
+        self.assertTrue(coordinator.disconnect_grace_active)
+        self.assertGreater(coordinator.reconnect_backoff_remaining, 9)
         self.assertIn(
             coordinator.address,
             sys.modules["homeassistant.components.bluetooth"].cleared_addresses,
         )
+
+        grace_task = coordinator._disconnect_grace_task
+        coordinator._mark_success()
+        await asyncio.gather(grace_task, return_exceptions=True)
+        self.assertFalse(coordinator.disconnect_grace_active)
+
+    async def test_disconnect_grace_expires_to_unavailable(self) -> None:
+        coordinator = self._coordinator()
+        client = types.SimpleNamespace(is_connected=False)
+
+        class _Device:
+            async def async_stop(self) -> None:
+                return None
+
+        coordinator._client = client
+        coordinator._dev = _Device()
+        coordinator.data = {"status": 0}
+        original_grace = coordinator_module.DISCONNECT_GRACE_PERIOD
+        coordinator_module.DISCONNECT_GRACE_PERIOD = 0.01
+        try:
+            await coordinator._async_handle_disconnected(client)
+            await asyncio.sleep(0.03)
+        finally:
+            coordinator_module.DISCONNECT_GRACE_PERIOD = original_grace
+
+        self.assertFalse(coordinator.disconnect_grace_active)
+        self.assertFalse(coordinator.last_update_success)
+        self.assertIsInstance(coordinator.last_exception, protocol.KettleError)
+
+    async def test_disconnect_without_snapshot_is_unavailable_immediately(self) -> None:
+        coordinator = self._coordinator()
+        client = types.SimpleNamespace(is_connected=False)
+
+        class _Device:
+            async def async_stop(self) -> None:
+                return None
+
+        coordinator._client = client
+        coordinator._dev = _Device()
+
+        await coordinator._async_handle_disconnected(client)
+
+        self.assertFalse(coordinator.last_update_success)
+        self.assertFalse(coordinator.disconnect_grace_active)
+        self.assertIsInstance(coordinator.last_exception, protocol.KettleError)
+
+    async def test_reconnect_failure_keeps_data_during_disconnect_grace(self) -> None:
+        coordinator = self._coordinator()
+        coordinator.data = {"status": 0, "current_temp": 25}
+        coordinator._disconnect_grace_deadline = coordinator_module.monotonic() + 30
+        coordinator._consecutive_failures = 1
+
+        data = coordinator._handle_update_failure(protocol.KettleError("weak signal"))
+
+        self.assertEqual(data, coordinator.data)
+        self.assertEqual(coordinator.consecutive_failures, 2)
+        self.assertTrue(coordinator.disconnect_grace_active)
+        self.assertTrue(coordinator.last_update_success)
+        self.assertIsNone(coordinator.update_interval)
 
     async def test_advertisement_during_backoff_schedules_delayed_refresh(self) -> None:
         coordinator = self._coordinator()

@@ -54,6 +54,10 @@ class KettleAuthError(KettleError):
     """The configured BLE token did not authenticate the kettle."""
 
 
+class KettlePropertyTimeout(KettleError):
+    """The kettle did not publish a requested property before the deadline."""
+
+
 class KettleGattError(KettleError):
     """The connected device did not expose the required Yunmi GATT layout."""
 
@@ -516,12 +520,14 @@ class YunmiKettle:
             remaining = deadline - loop.time()
             if remaining <= 0:
                 missing = sorted(pairs - updated.keys())
-                raise KettleError(f"timeout waiting for properties: {missing}")
+                raise KettlePropertyTimeout(f"timeout waiting for properties: {missing}")
             try:
                 await asyncio.wait_for(self._property_event.wait(), timeout=remaining)
             except TimeoutError:
                 missing = sorted(pairs - updated.keys())
-                raise KettleError(f"timeout waiting for properties: {missing}") from None
+                raise KettlePropertyTimeout(
+                    f"timeout waiting for properties: {missing}"
+                ) from None
 
     async def _wait_for_confirmed_value(
         self,
@@ -554,7 +560,18 @@ class YunmiKettle:
             wanted = set(chunk)
             baseline = {pair: self._property_versions.get(pair, 0) for pair in wanted}
             await self._send_subscribe(chunk)
-            got = await self._wait_for_properties(wanted, baseline, timeout=collect)
+            try:
+                got = await self._wait_for_properties(wanted, baseline, timeout=collect)
+            except KettlePropertyTimeout:
+                # A reconnect can restore an existing device-side subscription
+                # without replaying its current value. Ask for that value once
+                # over the already-authenticated session instead of tearing the
+                # session down and entering a reconnect/beep loop.
+                _LOGGER.debug(
+                    "subscription returned no current value for %s; falling back to read",
+                    sorted(wanted),
+                )
+                got = await self.read_many(chunk, timeout=collect)
             result.update(got)
         _LOGGER.debug("subscribe read %s props: %s", len(result), result)
         return result

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.4
+
+- Fall back to a direct property read when a restored device-side subscription does not
+  replay its current value. This keeps a successfully authenticated session alive instead
+  of entering a reconnect loop that can leave every entity unavailable and make the kettle
+  beep repeatedly.
+- Debounce unexpected RF disconnects for 30 seconds: retain the last confirmed values while
+  one advertisement-driven reconnect is attempted after backoff, then mark the device
+  unavailable if recovery does not succeed. A powered-off kettle is therefore not hidden.
+- Report disconnect-grace state and confirmed-data age in redacted diagnostics.
+- Replace the generic device artwork with a custom transparent Mi Smart Kettle Pro icon.
+
 ## 0.3.3
 
 - Validate all four required Yunmi GATT characteristics before login and report the exact

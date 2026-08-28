@@ -73,6 +73,15 @@ async def async_get_config_entry_diagnostics(
             "gatt_failure_streak": coordinator.gatt_failure_streak,
             "gatt_quiet_mode": coordinator.gatt_quiet_mode,
             "reconnect_backoff_remaining": round(coordinator.reconnect_backoff_remaining, 1),
+            "disconnect_grace_active": coordinator.disconnect_grace_active,
+            "disconnect_grace_remaining": round(
+                coordinator.disconnect_grace_remaining, 1
+            ),
+            "data_age_seconds": (
+                round((datetime.now(UTC) - coordinator.last_success).total_seconds(), 1)
+                if coordinator.last_success
+                else None
+            ),
             "last_error_type": type(error).__name__ if error else None,
             "last_error_message": str(error) if isinstance(error, KettleError) else None,
             "data": dict(coordinator.data or {}),
