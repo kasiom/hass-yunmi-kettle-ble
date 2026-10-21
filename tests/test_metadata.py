@@ -21,7 +21,7 @@ class MetadataTests(unittest.TestCase):
     def test_manifest_and_hacs_versions(self) -> None:
         manifest = json.loads((COMPONENT / "manifest.json").read_text(encoding="utf-8"))
         hacs = json.loads((ROOT / "hacs.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.3.4")
+        self.assertEqual(manifest["version"], "0.3.5")
         self.assertEqual(manifest["iot_class"], "local_push")
         self.assertEqual(
             manifest["issue_tracker"],

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.5
+
+- Remove the redundant BLE dependency and update HACS installation instructions.
+
 ## 0.3.4
 
 - Fall back to a direct property read when a restored device-side subscription does not

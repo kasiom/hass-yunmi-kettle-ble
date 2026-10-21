@@ -108,10 +108,10 @@ UI is localised in **Czech**, **English** and **Russian**.
    the extractor (do this yourself — never paste your Xiaomi password anywhere else), find
    the kettle, and copy its **MAC** (`AA:BB:CC:DD:EE:FF`) and its **token / beaconkey**
    (24 hex characters). The kettle must already be bound to your Mi Home account once.
-3. **Install the component.** Home Assistant 2025.3 or newer is required. Add
-   `https://github.com/kasiom/hass-yunmi-kettle-ble` as a custom **Integration** repository
-   in HACS, install *Yunmi Kettle*,
-   and restart Home Assistant. A manual copy of `custom_components/yunmi_kettle/` into
+3. **Install the component.** Home Assistant 2025.3 or newer is required. In HACS, search
+   for *Yunmi Kettle*, install it, and restart Home Assistant. The integration is included
+   in the HACS default catalog; no custom repository is needed.
+   A manual copy of `custom_components/yunmi_kettle/` into
    `config/custom_components/` works as well.
 4. **Add the integration.** Settings → Devices & Services → **Add Integration** →
    *"Yunmi Kettle"*. Enter the MAC, the token, a name and the push-watchdog interval.

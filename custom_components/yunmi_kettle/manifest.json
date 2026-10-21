@@ -14,6 +14,6 @@
   "integration_type": "device",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/kasiom/hass-yunmi-kettle-ble/issues",
-  "requirements": ["bleak-retry-connector>=3.5.0"],
-  "version": "0.3.4"
+  "requirements": [],
+  "version": "0.3.5"
 }
