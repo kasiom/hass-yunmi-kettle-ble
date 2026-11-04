@@ -99,23 +99,27 @@ UI is localised in **Czech**, **English** and **Russian**.
 
 ## Installation
 
-1. **Bluetooth reach.** The kettle must be in range of a Bluetooth adapter on your HA host,
-   or of an **ESPHome `bluetooth_proxy`** (recommended — see the example below). The kettle
-   accepts only **one** BLE client at a time, so while HA owns the connection keep your
-   phone's Bluetooth off / Mi Home closed.
-2. **Get the MAC and the BLE token (beaconkey).** Use a *Xiaomi cloud token extractor*
-   (e.g. `PiotrMachowski/Xiaomi-cloud-tokens-extractor`). Log into your Xiaomi account in
-   the extractor (do this yourself — never paste your Xiaomi password anywhere else), find
-   the kettle, and copy its **MAC** (`AA:BB:CC:DD:EE:FF`) and its **token / beaconkey**
-   (24 hex characters). The kettle must already be bound to your Mi Home account once.
-3. **Install the component.** Home Assistant 2025.3 or newer is required. In HACS, search
-   for *Yunmi Kettle*, install it, and restart Home Assistant. The integration is included
-   in the HACS default catalog; no custom repository is needed.
-   A manual copy of `custom_components/yunmi_kettle/` into
-   `config/custom_components/` works as well.
-4. **Add the integration.** Settings → Devices & Services → **Add Integration** →
-   *"Yunmi Kettle"*. Enter the MAC, the token, a name and the push-watchdog interval.
-   The kettle must be powered during this one-time login check.
+1. In Home Assistant 2025.3 or newer, open **HACS** and search for **Yunmi Kettle**.
+2. Open the integration and select **Download**.
+3. Restart Home Assistant, then follow [Set up in Home Assistant](#set-up-in-home-assistant).
+
+## Set up in Home Assistant
+
+1. Place the kettle within range of your Home Assistant Bluetooth adapter or an
+   [ESPHome Bluetooth proxy](#example-esphome-bluetooth-proxy). The kettle accepts only one
+   BLE client at a time. Close Mi Home or turn off Bluetooth on your phone while Home
+   Assistant is connected.
+2. Pair the kettle with Mi Home once. Use a Xiaomi cloud token extractor, such as
+   `PiotrMachowski/Xiaomi-cloud-tokens-extractor`, to copy the kettle's **MAC address**
+   (`AA:BB:CC:DD:EE:FF`) and **BLE token (beaconkey)** (24 hex characters). Enter your
+   Xiaomi account password only in the extractor.
+3. Keep the kettle powered. Go to **Settings → Devices & Services → Add Integration**
+   and select **Yunmi Kettle**. Enter the MAC address, token, name, and push-watchdog interval.
+
+## Manual installation
+
+Copy `custom_components/yunmi_kettle/` into `config/custom_components/` and restart Home
+Assistant. Then follow [Set up in Home Assistant](#set-up-in-home-assistant).
 
 ## Power switching and recovery
 
