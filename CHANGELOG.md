@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.6
+
+- Distinguish missing or unavailable Bluetooth channels from ordinary connection failures.
+- Clarify v14-only support in setup and error messages, including Czech and Russian.
+
 ## 0.3.5
 
 - Remove the redundant BLE dependency and update HACS installation instructions.

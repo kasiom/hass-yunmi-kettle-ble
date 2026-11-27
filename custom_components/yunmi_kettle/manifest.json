@@ -15,5 +15,5 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/kasiom/hass-yunmi-kettle-ble/issues",
   "requirements": [],
-  "version": "0.3.5"
+  "version": "0.3.6"
 }

@@ -10,6 +10,7 @@ import types
 import unittest
 from enum import StrEnum
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 
@@ -214,6 +215,117 @@ def _load_coordinator():
 
 
 coordinator_module = _load_coordinator()
+
+
+def _load_config_flow():
+    """Load the connection validator with minimal Home Assistant form stubs."""
+    voluptuous = types.ModuleType("voluptuous")
+    voluptuous.All = lambda *_validators: None
+    voluptuous.Coerce = lambda target: target
+    voluptuous.Range = lambda **_kwargs: None
+    sys.modules["voluptuous"] = voluptuous
+
+    class _ConfigFlow:
+        def __init_subclass__(cls, **_kwargs):
+            super().__init_subclass__()
+
+    config_entries = sys.modules["homeassistant.config_entries"]
+    config_entries.ConfigFlow = _ConfigFlow
+    config_entries.ConfigFlowResult = dict
+    config_entries.OptionsFlow = object
+
+    config_validation = types.ModuleType("homeassistant.helpers.config_validation")
+    config_validation.string = str
+    sys.modules["homeassistant.helpers.config_validation"] = config_validation
+    sys.modules["homeassistant.helpers"].config_validation = config_validation
+
+    selector = types.ModuleType("homeassistant.helpers.selector")
+    selector.TextSelector = lambda config: config
+    selector.TextSelectorConfig = dict
+    selector.TextSelectorType = types.SimpleNamespace(PASSWORD="password")
+    sys.modules["homeassistant.helpers.selector"] = selector
+
+    component = ROOT / "custom_components" / "yunmi_kettle"
+    return _load_module(f"{PACKAGE}.config_flow", component / "config_flow.py")
+
+
+config_flow_module = _load_config_flow()
+
+
+class ConfigFlowConnectionTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.hass = object()
+        self.mac = "AA:BB:CC:DD:EE:FF"
+        self.token = "00112233445566778899aabb"
+        self.client = _FakeBleakClient()
+        self.cache = AsyncMock()
+        self.login = AsyncMock()
+        self.connect = AsyncMock(return_value=self.client)
+        for target, attribute, replacement in (
+            (config_flow_module, "establish_connection", self.connect),
+            (config_flow_module, "clear_cache", self.cache),
+            (protocol.YunmiKettle, "login", self.login),
+            (
+                config_flow_module.bluetooth,
+                "async_ble_device_from_address",
+                lambda *_args, **_kwargs: object(),
+            ),
+        ):
+            patcher = patch.object(target, attribute, replacement)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    async def test_v12_channels_report_incompatibility_before_login(self) -> None:
+        self.client = _FakeBleakClient(
+            tuple(_uuid(short) for short in ("0010", "0017", "0018", "0019", "aa01"))
+        )
+        self.connect.return_value = self.client
+
+        result = await config_flow_module._test_connection(self.hass, self.mac, self.token)
+
+        self.assertEqual(result, "incompatible_gatt")
+        self.login.assert_not_awaited()
+        self.assertEqual(self.client.notifications, [])
+        self.cache.assert_awaited_once_with(self.mac)
+        self.assertFalse(self.client.is_connected)
+
+    async def test_supported_v14_still_logs_in_successfully(self) -> None:
+        result = await config_flow_module._test_connection(self.hass, self.mac, self.token)
+
+        self.assertIsNone(result)
+        self.login.assert_awaited_once()
+        self.assertEqual(self.client.notifications, list(protocol.REQUIRED_GATT_UUIDS))
+        self.cache.assert_not_awaited()
+        self.assertFalse(self.client.is_connected)
+
+    async def test_unavailable_notifications_report_channel_error(self) -> None:
+        self.client.start_notify = AsyncMock(side_effect=RuntimeError("not available"))
+
+        result = await config_flow_module._test_connection(self.hass, self.mac, self.token)
+
+        self.assertEqual(result, "incompatible_gatt")
+        self.login.assert_not_awaited()
+        self.cache.assert_awaited_once_with(self.mac)
+        self.assertFalse(self.client.is_connected)
+
+    async def test_invalid_key_keeps_its_authentication_error(self) -> None:
+        self.login.side_effect = protocol.KettleAuthError("wrong key")
+
+        result = await config_flow_module._test_connection(self.hass, self.mac, self.token)
+
+        self.assertEqual(result, "invalid_auth")
+        self.cache.assert_not_awaited()
+        self.assertFalse(self.client.is_connected)
+
+    async def test_missing_device_keeps_its_connection_error(self) -> None:
+        with patch.object(
+            config_flow_module.bluetooth, "async_ble_device_from_address", return_value=None
+        ):
+            result = await config_flow_module._test_connection(self.hass, self.mac, self.token)
+
+        self.assertEqual(result, "cannot_connect")
+        self.connect.assert_not_awaited()
+        self.login.assert_not_awaited()
 
 
 class ProtocolParsingTests(unittest.TestCase):

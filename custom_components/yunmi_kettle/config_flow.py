@@ -83,7 +83,7 @@ async def _test_connection(hass, mac: str, token: str) -> str | None:
             await clear_cache(mac)
         except Exception:  # noqa: BLE001 - cache removal is best effort
             pass
-        return "cannot_connect"
+        return "incompatible_gatt"
     except Exception:  # noqa: BLE001
         return "cannot_connect"
     finally:

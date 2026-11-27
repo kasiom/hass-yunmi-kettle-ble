@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Yunmi Kettle (Mi Smart Kettle Pro)",
-        "description": "Connects over Bluetooth (incl. ESPHome proxy). Get the MAC and token with the Xiaomi cloud token extractor.",
+        "description": "Supports yunmi.kettle.v14 only, over Bluetooth (including ESPHome proxies). Get the MAC and BLE token with the Xiaomi cloud token extractor.",
         "data": {
           "mac": "MAC address",
           "token": "BLE token (24 hex chars)",
@@ -33,6 +33,7 @@
       "invalid_token": "Token must be 24 hexadecimal characters.",
       "miot_token_not_supported": "This looks like a 32-character MiIO token. This kettle needs its 24-character BLE beaconkey instead.",
       "cannot_connect": "Couldn't reach the kettle. Check it's powered, in range of a Bluetooth adapter/proxy, and that its Bluetooth isn't held by the phone.",
+      "incompatible_gatt": "The required Bluetooth channels are missing or unavailable. Only yunmi.kettle.v14 is supported; v12 is not. If your model is v14, check the Bluetooth connection and try again.",
       "invalid_auth": "Login failed — the token is wrong for this kettle."
     },
     "abort": {
